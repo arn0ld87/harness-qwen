@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from harness.agent.overflow import recover_overflow
 from harness.agent.retry import ErrorCategory, RetryPolicy
 from harness.agent.roles import RoleSequencer
 from harness.agent.verifier import ExecutedStep, Verifier, capture_workspace_baseline
@@ -322,20 +323,36 @@ class AgentLoop:
         )
 
     def _try_compress(self, state: TaskState, *, trigger: str) -> bool:
-        """Run the ladder once and report whether it resolved the trigger."""
+        """Run the ladder and report whether it resolved the trigger.
+
+        ``context_overflow`` is delegated to :func:`recover_overflow`, which
+        climbs the ladder until the prompt is net smaller *and* back under the
+        hard ceiling (issue #6) — a rung that frees tokens locally but leaves
+        the prompt larger, or still over the window, has not resolved it.
+        Outside overflow (``append_budget``) the ladder runs once and any
+        applied rung is enough: the soft ceiling is advisory, not a hard
+        failure there, and ungated rungs (retrieval) stay available.
+        """
+        if trigger == "context_overflow":
+            return recover_overflow(
+                state=self._compression_state(),
+                economics=self.economics,
+                ladder=self.ladder,
+                journal=self.journal,
+                current_step=state.step_index,
+                max_steps=self.budget.max_steps,
+                persist=self._persist_runtime_state,
+            )
         outcomes = escalate(
             self.ladder, self._compression_state(), self.economics,
             current_step=state.step_index, max_steps=self.budget.max_steps,
+            trigger=trigger,
         )
         for outcome in outcomes:
             self.journal.log_event(
                 "compression", trigger=trigger, strategy=outcome.strategy,
                 applied=outcome.applied, freed_tokens=outcome.freed_tokens, reason=outcome.reason,
             )
-        if trigger == "context_overflow":
-            self._persist_runtime_state()
-        if trigger == "context_overflow":
-            return any(outcome.resolves_overflow for outcome in outcomes)
         return any(outcome.applied for outcome in outcomes)
 
     def _maybe_compress(self, state: TaskState) -> None:

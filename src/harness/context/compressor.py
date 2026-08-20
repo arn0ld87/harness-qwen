@@ -357,6 +357,7 @@ def escalate(
     *,
     current_step: int,
     max_steps: int,
+    trigger: str = "",
 ) -> list[StrategyOutcome]:
     """Walk the ladder in order, applying the first rung that pays for
     itself, and stop there.
@@ -367,13 +368,26 @@ def escalate(
     :class:`~harness.context.economics.CacheEconomics` before
     :meth:`CompressionStrategy.apply` is ever called; the walk stops at the
     first one whose numbers clear the bar.
+
+    ``trigger="context_overflow"`` skips ungated rungs: a pure append adds
+    tokens, so it cannot relieve an overflow — running it there would only
+    grow the prompt and mask whether recovery actually happened (issue #6).
+    Outside that trigger (e.g. ``append_budget``) ungated rungs stay available.
     """
+    overflow = trigger == "context_overflow"
     outcomes: list[StrategyOutcome] = []
     for strategy in strategies:
         freed = strategy.estimate_freed_tokens(state)
         reprocess = strategy.reprocess_tokens(state)
 
         if not strategy.gated:
+            if overflow:
+                outcomes.append(StrategyOutcome(
+                    strategy=strategy.name, freed_tokens=freed, reprocess_tokens=reprocess,
+                    applied=False, resolves_overflow=False,
+                    reason="skipped at context_overflow: pure append cannot relieve overflow",
+                ))
+                continue
             before = state.assembler.append_messages
             strategy.apply(state)
             applied = state.assembler.append_messages != before
