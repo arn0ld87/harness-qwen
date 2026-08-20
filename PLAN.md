@@ -44,7 +44,23 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    Skip-Gruende, Gate als eigener Schritt mit eindeutiger Fehlermeldung.
 
 ### Phase B — v0.3 Runtime & CLI
-- [ ] #10 runtime/ Supervisor (Start/Stop/Health, PID, Attach, Crash, stdout secret-safe)
+- [x] #10 runtime/ Supervisor (Start/Stop/Health, PID, Attach, Crash, stdout secret-safe)
+
+#### Sub-Slice 10.1 — Lifecycle eines lokalen llama-server
+1. `runtime/handle.py`: `RuntimeHandle` mit Ownership (owned/attached), PID,
+   Startzeit, Log-Pfad. Owned und attached sind verschiedene Typzustaende,
+   nicht ein Flag, das man vergisst zu pruefen.
+2. `runtime/argv.py`: Startkommando aus `ModelConfig`/`RuntimeConfig`, typisiert
+   vor `extra_flags`.
+3. `runtime/supervisor.py`: start/attach/health/stop. Health-Wait mit Timeout
+   und Klassifikation (crashed vs. timeout vs. laedt noch).
+4. Graceful stop (SIGTERM), harter Kill nur nach Frist; `stop()` beendet
+   niemals einen attached Prozess.
+5. stdout/stderr zeilenweise durch `telemetry.redact` in eine Logdatei.
+6. Tests: Stub-Server statt 35B-Modell (Start, langsamer Start, Crash beim
+   Start, Crash im Betrieb, Secret im Log, Stop-Verweigerung bei attached).
+   Zusaetzlich ein `local_llm`-Test, der an die laufende Instanz attached,
+   ohne sie zu stoppen.
 - [ ] #11 Portbesitz, stale/foreign, Startvalidierung (auf #10)
 - [x] #12 config/ Schicht (Defaults<File<Env<CLI, redigiert, Hardware-Profil, typisiert)
 
