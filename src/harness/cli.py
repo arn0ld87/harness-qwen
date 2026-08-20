@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from harness import __version__
+from harness.cli_inspect import config_app, memory_app
 from harness.config import ConfigError, load_config
 from harness.diagnostics import Diagnosis, Severity, diagnose
 from harness.discovery import build_profile, save_profile
@@ -29,6 +30,9 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+app.add_typer(config_app, name="config")
+app.add_typer(memory_app, name="memory")
+
 console = Console()
 
 GIB = 1024 ** 3

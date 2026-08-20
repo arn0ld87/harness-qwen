@@ -91,7 +91,27 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    Profil, kaputte Datei.
 - [ ] #13 `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
 - [ ] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
-- [ ] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
+- [x] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
+
+#### Sub-Slice 15.1 — Inspektion ohne SQLite-Handarbeit
+1. `MemoryStore(path, read_only=True)`: Verbindung als `mode=ro`, kein
+   `journal_mode`-Write, kein FTS-Aufbau. `migrations.check_schema` prueft
+   die Version, statt sie zu heben — Ansehen ist keine Zustimmung zur
+   Migration.
+2. `memory/inspect.py`: eine Payload fuer Mensch und `--json`, damit beide
+   dieselbe Teilmenge sehen. Unlesbare Zeilen werden pro Run als `errors`
+   gemeldet, nicht geworfen — ein kaputter Store ist der Anlass des Befehls.
+3. Redaktion ueber `telemetry.redact.redact_data` (neu, strukturerhaltend):
+   Step-Argumente sind das, womit ein Tool aufgerufen wurde, inklusive
+   Auth-Header.
+4. `cli_inspect.py` traegt beide Kommandos; `cli.py` bleibt unter der
+   500-Zeilen-Grenze und behaelt `doctor`.
+5. `config show`: Wert, Ebene und Quelle je dotted path, Secrets doppelt
+   entfernt (deklariert per Name, frei formulierte per Textscrubber),
+   `ResolvedConfig.warnings` mit ausgegeben.
+6. Tests: Provenance, Redaktion in beiden Ausgaben, Run-/Status-Filter,
+   unbekannter Run, fehlende Datei, Fremddatei, alte Schema-Version ohne
+   Migration, beschaedigter TaskState, Byte-Gleichheit der DB nach dem Lauf.
 - [x] #16 `harness doctor` ausbauen (Sandbox/Port/Health/JSON-Exit, auf #7/#10/#12)
 
 ### Phase C — v0.4 Retrieval & Benchmarks

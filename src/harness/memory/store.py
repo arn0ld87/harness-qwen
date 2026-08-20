@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from pydantic import BaseModel, ValidationError
 
@@ -27,6 +28,7 @@ from harness.memory.migrations import (
     SCHEMA_VERSION,
     StoreError,
     UnknownRunError,
+    check_schema,
     configure,
     ensure_schema,
     object_exists,
@@ -59,18 +61,41 @@ def _now() -> str:
 class MemoryStore:
     """Durable store for run state, step history and persistent facts."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, read_only: bool = False) -> None:
         self.path = Path(path)
-        if str(self.path) != ":memory:":
+        self.read_only = read_only
+        if not read_only and str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         # check_same_thread is off because the agent loop may hand a blocking
         # call to a worker thread; the lock is what keeps that safe.
-        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._conn = sqlite3.connect(
+            self._dsn(), uri=read_only, check_same_thread=False
+        )
         self._conn.row_factory = sqlite3.Row
-        configure(self._conn)
-        self.schema_version = ensure_schema(self._conn, str(self.path))
-        self.facts = FactStore(self._conn, self._lock, fts5=fts5_available())
+        if read_only:
+            # No pragmas that write: journal_mode would change the file this
+            # caller promised not to touch. The schema version is verified
+            # rather than lifted — see migrations.check_schema.
+            self.schema_version = check_schema(self._conn, str(self.path))
+        else:
+            configure(self._conn)
+            self.schema_version = ensure_schema(self._conn, str(self.path))
+        self.facts = FactStore(
+            self._conn, self._lock, fts5=fts5_available(), read_only=read_only
+        )
+
+    def _dsn(self) -> str:
+        """Connection string; ``mode=ro`` makes SQLite itself refuse writes.
+
+        A read-only store is used by ``memory inspect`` on a database another
+        process may be actively writing. Enforcing that at the driver rather
+        than by reviewing every call site is the difference between a rule and
+        a guarantee.
+        """
+        if not self.read_only:
+            return str(self.path)
+        return f"file:{quote(str(self.path))}?mode=ro"
 
     @property
     def fts5(self) -> bool:
