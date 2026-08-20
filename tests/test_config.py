@@ -79,8 +79,34 @@ def test_untouched_fields_keep_the_default_origin(tmp_path: Path) -> None:
     path = _write(tmp_path / "harness.json", {"runtime": {"port": 9999}})
     resolved = resolve_config(config_file=path)
 
-    assert resolved.origin_of("runtime.base_url") is Origin.DEFAULT
     assert resolved.origin_of("budget.max_steps") is Origin.DEFAULT
+    assert resolved.origin_of("sandbox.network") is Origin.DEFAULT
+
+
+def test_a_derived_value_inherits_the_origin_it_was_derived_from(
+    tmp_path: Path,
+) -> None:
+    """base_url follows the port, so it must not read as a built-in default.
+
+    Presenting a URL that came from a config file as one nobody chose is the
+    exact question this layer exists to answer.
+    """
+    path = _write(tmp_path / "harness.json", {"runtime": {"port": 9999}})
+    resolved = resolve_config(config_file=path)
+
+    assert resolved.config.runtime.base_url == "http://127.0.0.1:9999"
+    assert resolved.origin_of("runtime.base_url") is Origin.FILE
+    assert "runtime.port" in resolved.source_of("runtime.base_url")
+
+
+def test_an_explicit_url_keeps_its_own_origin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "harness.json",
+        {"runtime": {"base_url": "http://10.0.0.5:8080", "port": 9999}},
+    )
+    resolved = resolve_config(config_file=path)
+
+    assert "derived" not in resolved.source_of("runtime.base_url")
 
 
 def test_origin_records_which_file_a_value_came_from(tmp_path: Path) -> None:
@@ -124,14 +150,35 @@ def test_an_out_of_range_port_is_rejected() -> None:
         resolve_config(overrides={"runtime.port": 70000})
 
 
-def test_a_soft_ceiling_above_the_window_is_rejected() -> None:
-    """The two numbers are related, so the pair is validated, not each alone."""
-    with pytest.raises(ConfigError) as exc:
-        resolve_config(
-            overrides={"context.context_window": 8192, "context.soft_ceiling": 16000}
-        )
+def test_a_soft_ceiling_above_the_window_is_clamped_and_reported() -> None:
+    """Clamped, not refused — and never silently.
 
-    assert "soft_ceiling" in str(exc.value)
+    Refusing looked principled until a hardware profile measuring a smaller
+    context blocked every command on the weaker machine it was measured on:
+    the layer meant to be advisory became a gate. The advisory limit is
+    lowered to the hard one, and the adjustment is reported.
+    """
+    resolved = resolve_config(
+        overrides={"context.context_window": 8192, "context.soft_ceiling": 16000}
+    )
+
+    assert resolved.config.context.soft_ceiling == 8192
+    assert any("soft_ceiling" in warning for warning in resolved.warnings)
+
+
+def test_a_profile_measuring_a_smaller_context_does_not_block_the_run(
+    tmp_path: Path,
+) -> None:
+    """The case that turned a measurement into a requirement."""
+    profile = _write(
+        tmp_path / "hw.json",
+        {"schema_version": 1, "recommended": {"context_length": 8192}},
+    )
+
+    resolved = resolve_config(profile_file=profile)
+
+    assert resolved.config.context.context_window == 8192
+    assert resolved.config.context.soft_ceiling <= 8192
 
 
 def test_an_unknown_key_is_refused_rather_than_ignored(tmp_path: Path) -> None:
@@ -305,9 +352,10 @@ def test_unmeasured_recommendations_are_left_alone(tmp_path: Path) -> None:
     assert resolved.origin_of("model.n_gpu_layers") is Origin.DEFAULT
 
 
-def test_the_real_repository_profile_resolves(tmp_path: Path) -> None:
+def test_the_real_repository_profile_resolves() -> None:
     """The checked-in i7-7700/GTX-1060 profile must actually apply."""
-    resolved = resolve_config(profile_file=Path("config/hardware-profile.json"))
+    repo = Path(__file__).resolve().parents[1]
+    resolved = resolve_config(profile_file=repo / "config" / "hardware-profile.json")
 
     assert resolved.hardware_profile is not None
     assert resolved.config.model.threads == 4
@@ -333,15 +381,117 @@ def test_an_unset_secret_reads_as_unset() -> None:
     assert "api_key = None" in rendered
 
 
-def test_a_secret_hidden_inside_a_free_form_value_is_still_scrubbed() -> None:
-    """Defence in depth: extra_flags is passed through verbatim.
+def test_a_secret_passed_as_a_server_flag_is_scrubbed() -> None:
+    """The real shape: ``--api-key VALUE``, two list entries, no `=`.
 
-    Declared secret fields are redacted by name; anything else goes through
-    the same scrubber telemetry uses, because a key can end up in a value
-    nobody declared as one.
+    The text scrubber only matches ``name=value``, so it never saw this one.
+    An earlier version of this test used an AWS-shaped key, which the scrubber
+    catches by its own prefix pattern — it passed while the case that actually
+    occurs, and reaches the terminal through ``config show``, leaked.
     """
     resolved = resolve_config(
-        overrides={"model.extra_flags": ["--api-key", "AKIAIOSFODNN7EXAMPLE"]}
+        overrides={
+            "model.extra_flags": ["--api-key", "sk-abcdef0123456789abcdef", "--jinja"]
+        }
     )
 
+    rendered = resolved.render()
+
+    assert "sk-abcdef0123456789abcdef" not in rendered
+    assert "--api-key" in rendered   # that a key is passed stays visible
+    assert "--jinja" in rendered     # ordinary flags are untouched
+    assert "sk-abcdef0123456789abcdef" not in json.dumps(resolved.as_dict())
+
+
+def test_a_secret_matching_a_known_pattern_is_still_scrubbed() -> None:
+    resolved = resolve_config(overrides={"model.alias": "AKIAIOSFODNN7EXAMPLE"})
     assert "AKIAIOSFODNN7EXAMPLE" not in resolved.render()
+
+
+def test_the_flag_value_is_intact_for_the_server() -> None:
+    """Only the *output* is redacted; llama-server still gets the real key."""
+    resolved = resolve_config(
+        overrides={"model.extra_flags": ["--api-key", "sk-abcdef0123456789abcdef"]}
+    )
+    assert resolved.config.model.extra_flags[1] == "sk-abcdef0123456789abcdef"
+
+
+# -- typos must not look like settings -------------------------------------
+
+
+def test_a_typo_in_the_budget_section_is_refused(tmp_path: Path) -> None:
+    """`Budget` itself is lenient; configuration must not be.
+
+    `max_stpes` was accepted and dropped, and the run then used the default
+    while its author believed otherwise — the one failure mode this whole
+    layer is meant to remove.
+    """
+    path = _write(tmp_path / "harness.json", {"budget": {"max_stpes": 999}})
+
+    with pytest.raises(ConfigError) as exc:
+        resolve_config(config_file=path)
+
+    assert "max_stpes" in str(exc.value)
+
+
+def test_an_unknown_environment_variable_is_refused() -> None:
+    with pytest.raises(ConfigError) as exc:
+        resolve_config(env={"HARNESS_MODEL_NGPU_LAYERS": "99"})
+
+    assert "HARNESS_MODEL_NGPU_LAYERS" in str(exc.value)
+
+
+def test_unrelated_environment_variables_are_left_alone() -> None:
+    """Only the HARNESS_ namespace is ours to police."""
+    resolved = resolve_config(env={"PATH": "/usr/bin", "EDITOR": "vim"})
+    assert resolved.config.runtime.port == HarnessConfig().runtime.port
+
+
+def test_a_scalar_where_a_section_belongs_is_reported(tmp_path: Path) -> None:
+    path = _write(tmp_path / "harness.json", {"runtime": 5})
+
+    with pytest.raises(ConfigError) as exc:
+        resolve_config(config_file=path, env={"HARNESS_RUNTIME_PORT": "9000"})
+
+    assert "runtime" in str(exc.value)
+
+
+# -- one window, not two ---------------------------------------------------
+
+
+def test_the_budget_window_follows_the_window_the_server_is_started_with() -> None:
+    """`n_ctx` launches the server; `context_window` is what the budget fills.
+
+    Two numbers for one window let the budget grow a prompt past what the
+    server accepts, and the overflow then arrives as a runtime error instead
+    of a configuration one.
+    """
+    resolved = resolve_config(overrides={"model.n_ctx": 8192})
+
+    assert resolved.config.context.context_window == 8192
+    assert resolved.config.context.soft_ceiling <= 8192
+    assert any("context_window" in warning for warning in resolved.warnings)
+
+
+def test_without_n_ctx_the_configured_window_stands() -> None:
+    resolved = resolve_config(overrides={"context.context_window": 32768})
+
+    assert resolved.config.context.context_window == 32768
+    assert resolved.warnings == []
+
+
+# -- error messages name their source --------------------------------------
+
+
+def test_a_whole_section_validator_still_names_the_source(tmp_path: Path) -> None:
+    """The hardest errors to trace are the ones a model validator raises.
+
+    Pydantic reports the section it guards, not the field that broke it, so an
+    exact provenance lookup finds nothing precisely where it is needed most.
+    """
+    path = _write(tmp_path / "harness.json", {"runtime": {"port": 70000}})
+
+    with pytest.raises(ConfigError) as exc:
+        resolve_config(config_file=path)
+
+    assert str(path) in str(exc.value)

@@ -18,7 +18,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from harness.config.schema import SECRET_FIELDS, HarnessConfig
+from harness.config.schema import (
+    SECRET_FIELDS,
+    SECRET_FLAG_SUFFIXES,
+    HarnessConfig,
+)
 from harness.telemetry.redact import redact
 
 DEFAULT_CONFIG_NAMES: tuple[str, ...] = ("harness.json", ".harness.json")
@@ -63,6 +67,10 @@ class ResolvedConfig:
         self.config = config
         self._origins = dict(origins)
         self.hardware_profile = hardware_profile
+        self.warnings: list[str] = list(config.context.adjustments)
+        """Values corrected during validation. Reported rather than raised, so
+        a measurement of a smaller machine adjusts the run instead of blocking
+        it — but never silently."""
 
     def origin_of(self, path: str) -> Origin:
         """Layer that set ``path`` (dotted), or DEFAULT if nothing did."""
@@ -154,6 +162,7 @@ def resolve_config(
     except ValidationError as exc:
         raise ConfigError(_explain(exc, origins)) from exc
 
+    _inherit_derived_origins(config, merged, origins)
     return ResolvedConfig(config, origins, profile)
 
 
@@ -250,14 +259,27 @@ def _from_env(env: Mapping[str, str]) -> dict[str, tuple[Any, str]]:
     """
     fields = _known_paths(HarnessConfig)
     found: dict[str, tuple[Any, str]] = {}
+    unknown: list[str] = []
     for variable, raw in env.items():
         if not variable.startswith(ENV_PREFIX):
             continue
         tail = variable[len(ENV_PREFIX) :].lower()
         match = next((path for path in fields if _env_name(path) == tail), None)
         if match is None:
+            unknown.append(variable)
             continue
         found[match] = (raw, variable)
+
+    if unknown:
+        # The same failure class ``extra="forbid"`` catches in files: a
+        # misspelled variable that is skipped looks exactly like one that
+        # applied, and the run it fails to configure is the one nobody debugs.
+        names = ", ".join(sorted(unknown))
+        raise ConfigError(
+            f"unknown configuration variable(s): {names}. Valid names are "
+            f"{ENV_PREFIX}<SECTION>_<FIELD>, e.g. "
+            f"{ENV_PREFIX}{_env_name('runtime.port').upper()}."
+        )
     return found
 
 
@@ -292,11 +314,15 @@ def _nest(flat: Mapping[str, Any]) -> dict[str, Any]:
 def _assign(target: dict[str, Any], path: str, value: Any) -> None:
     parts = path.split(".")
     cursor = target
+    walked: list[str] = []
     for part in parts[:-1]:
+        walked.append(part)
         nxt = cursor.setdefault(part, {})
         if not isinstance(nxt, dict):
-            nxt = {}
-            cursor[part] = nxt
+            raise ConfigError(
+                f"cannot set {path}: {'.'.join(walked)} is "
+                f"{type(nxt).__name__}, not a section"
+            )
         cursor = nxt
     cursor[parts[-1]] = value
 
@@ -326,6 +352,38 @@ def _redact_in_place(data: dict[str, Any]) -> None:
             _redact_in_place(value)
         elif key in SECRET_FIELDS and value is not None:
             data[key] = REDACTED
+        elif isinstance(value, list):
+            data[key] = _redact_flags(value)
+
+
+def _redact_flags(argv: list[Any]) -> list[Any]:
+    """Hide the value that follows a credential-carrying flag.
+
+    Both spellings: ``--api-key VALUE`` (the one llama-server actually uses,
+    and the one a pattern matching ``name=value`` never saw) and
+    ``--api-key=VALUE``. The flag itself stays visible — that a key is being
+    passed is exactly what someone reading ``config show`` needs to know.
+    """
+    out: list[Any] = []
+    hide_next = False
+    for item in argv:
+        if hide_next:
+            out.append("[redacted:flag_value]")
+            hide_next = False
+            continue
+        if isinstance(item, str) and item.startswith("-"):
+            name, sep, _value = item.partition("=")
+            if _is_secret_flag(name):
+                out.append(f"{name}=[redacted:flag_value]" if sep else item)
+                hide_next = not sep
+                continue
+        out.append(item)
+    return out
+
+
+def _is_secret_flag(name: str) -> bool:
+    lowered = name.lower()
+    return any(lowered.endswith(suffix) for suffix in SECRET_FLAG_SUFFIXES)
 
 
 def _explain(exc: ValidationError, origins: Mapping[str, tuple[Origin, str]]) -> str:
@@ -337,10 +395,45 @@ def _explain(exc: ValidationError, origins: Mapping[str, tuple[Origin, str]]) ->
     lines: list[str] = []
     for error in exc.errors():
         path = ".".join(str(part) for part in error["loc"])
-        where = origins.get(path)
+        where = origins.get(path) or _origin_under(path, origins)
         suffix = f" (from {where[1]})" if where else ""
         lines.append(f"{path}: {error['msg']}{suffix}")
     return "invalid configuration:\n  " + "\n  ".join(lines)
+
+
+def _origin_under(
+    path: str, origins: Mapping[str, tuple[Origin, str]]
+) -> tuple[Origin, str] | None:
+    """Source of any field inside ``path``.
+
+    A whole-model validator reports the section it guards, not the field that
+    broke it, so an exact lookup finds nothing — on exactly the error class
+    that is hardest to trace back to its source.
+    """
+    prefix = f"{path}."
+    inner = sorted(key for key in origins if key.startswith(prefix))
+    return origins[inner[0]] if inner else None
+
+
+def _inherit_derived_origins(
+    config: HarnessConfig,
+    merged: Mapping[str, Any],
+    origins: dict[str, tuple[Origin, str]],
+) -> None:
+    """Attribute a derived value to whatever it was derived from.
+
+    ``base_url`` follows host and port unless it was set explicitly. Leaving
+    it marked as a built-in default would present a URL that came from a
+    config file as one nobody chose — the exact question provenance exists to
+    answer.
+    """
+    if "runtime.base_url" in _flatten(merged):
+        return
+    for source in ("runtime.port", "runtime.host"):
+        if source in origins:
+            layer, where = origins[source]
+            origins["runtime.base_url"] = (layer, f"derived from {source} ({where})")
+            return
 
 
 __all__ = [

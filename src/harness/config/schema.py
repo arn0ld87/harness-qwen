@@ -28,6 +28,15 @@ SECRET_FIELDS: frozenset[str] = frozenset({"api_key"})
 """Fields never printed in the clear. Kept as names rather than a pattern so a
 new secret has to be declared, not merely hoped to match."""
 
+SECRET_FLAG_SUFFIXES: tuple[str, ...] = ("-key", "-token", "-password", "-secret")
+"""Server flags whose *next* argument is a credential.
+
+``extra_flags`` is passed to llama-server verbatim, and the real form is
+``--api-key VALUE`` — two list entries, no ``=``. The text scrubber only ever
+matched ``name=value``, so this shape went straight to the terminal through
+``config show``. Matching on the suffix rather than a fixed list means a flag
+this harness has not heard of still gets its value hidden."""
+
 
 class _Strict(BaseModel):
     """Reject unknown keys everywhere.
@@ -93,14 +102,26 @@ class ContextConfig(_Strict):
         default=DEFAULT_GENERATION_RESERVE_RATIO, gt=0.0, lt=1.0
     )
 
+    adjustments: list[str] = Field(default_factory=list, exclude=True)
+    """Corrections applied during validation, surfaced as warnings."""
+
     @model_validator(mode="after")
     def _ceiling_fits_the_window(self) -> ContextConfig:
+        """Lower the advisory limit to the hard one instead of refusing.
+
+        Refusing looked principled until a hardware profile measuring a
+        smaller context blocked every command on the machine it was measured
+        on: the layer meant to be advisory had become a gate. The pair still
+        cannot be left inconsistent — a soft ceiling above the window would
+        let the budget grow the prompt past what the server accepts — so it is
+        clamped, and the adjustment is reported rather than applied quietly.
+        """
         if self.soft_ceiling > self.context_window:
-            raise ValueError(
-                f"soft_ceiling {self.soft_ceiling} exceeds context_window "
-                f"{self.context_window}: the advisory limit cannot sit above "
-                "the hard one"
+            self.adjustments.append(
+                f"soft_ceiling lowered from {self.soft_ceiling} to "
+                f"{self.context_window} to fit the context window"
             )
+            self.soft_ceiling = self.context_window
         return self
 
 
@@ -113,6 +134,18 @@ class SandboxConfig(_Strict):
     running them unsandboxed."""
 
 
+class StrictBudget(Budget):
+    """``core.Budget`` with unknown keys refused.
+
+    A subclass rather than a change to ``Budget`` itself: the loop takes the
+    base type and is unaffected, while a ``max_stpes`` in a config file stops
+    being silently dropped. Configuration is the one place where a typo is
+    indistinguishable from a decision.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class HarnessConfig(_Strict):
     """The whole effective configuration."""
 
@@ -120,11 +153,37 @@ class HarnessConfig(_Strict):
     model: ModelConfig = Field(default_factory=ModelConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
-    budget: Budget = Field(default_factory=Budget)
-    """The same ``core.Budget`` the loop enforces — not a parallel model that
-    would have to be kept in step with it."""
+    budget: StrictBudget = Field(default_factory=StrictBudget)
+    """The bounds the loop enforces, typed as ``core.Budget`` — not a parallel
+    model that would have to be kept in step with it."""
     workspace: Path = Field(default_factory=Path.cwd)
     database: Path = Path(".harness/memory.sqlite")
+
+    @model_validator(mode="after")
+    def _server_window_and_budget_window_agree(self) -> HarnessConfig:
+        """Keep ``model.n_ctx`` and ``context.context_window`` from diverging.
+
+        ``n_ctx`` is what the server is started with; ``context_window`` is
+        what ``TokenBudget`` believes it may fill. Two numbers for one window
+        means the budget can grow a prompt past what the server accepts, and
+        the overflow arrives as a runtime error rather than a config one. The
+        launched value wins where it is set and the other is untouched.
+        """
+        if self.model.n_ctx is None:
+            return self
+        if self.context.context_window != self.model.n_ctx:
+            self.context.adjustments.append(
+                f"context_window set to {self.model.n_ctx} to match the "
+                "context size the server is launched with (model.n_ctx)"
+            )
+            self.context.context_window = self.model.n_ctx
+            if self.context.soft_ceiling > self.context.context_window:
+                self.context.adjustments.append(
+                    f"soft_ceiling lowered to {self.context.context_window} "
+                    "to fit that window"
+                )
+                self.context.soft_ceiling = self.context.context_window
+        return self
 
 
 __all__ = [
@@ -134,4 +193,5 @@ __all__ = [
     "ModelConfig",
     "RuntimeConfig",
     "SandboxConfig",
+    "StrictBudget",
 ]
