@@ -70,20 +70,25 @@ client.
 | `context` | 80% | 83.2% |
 | `memory` | 75% | 77.9% |
 | `protocol` | 65% | 68.7% |
-| `security` | 50% | 53.5% |
+| `security` | 97% | 99.4% |
 | `tools` | 40% | 44.2% |
+| `security/classifier.py` (file) | 97% | 99.7% |
+| `security/shellsplit.py` (file) | 100% | 100% |
 | `tools/shell.py` (file) | 85% | 90.6% |
-| total | 66% | 68.7% |
+| total | 66% | 73.9% |
 
-`shell.py` carries its own floor because a package average hides its riskiest
-member: `tools` is held down by `filesystem.py` and `git.py` having no unit
-tests, which says nothing about the bubblewrap boundary.
+Three files carry their own floor because a package average hides its riskiest
+member. `tools` is held down by `filesystem.py` and `git.py` having no unit
+tests, which says nothing about the bubblewrap boundary in `shell.py`. And in
+`security`, `shellsplit.py` decides *which* command the classifier judges: a
+gap there moves the subject of the decision, so the classifier can be right and
+still release the wrong thing.
 
 Floors start just below the measured baseline — a gate that ships red teaches
 everyone to ignore it. Raise them in `pyproject.toml`, no code change needed.
-`security` is the one to raise first: `rules.py` and `shellsplit.py` sit near
-31%, and this is the module where an untested path is a security claim nobody
-checked. Tracked in #32.
+`security` carries the highest floor in the tree rather than the lowest
+(#32): this is the module where an untested path is a security claim nobody
+checked.
 
 ## Non-negotiables
 
