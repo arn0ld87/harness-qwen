@@ -113,7 +113,6 @@ class Verifier:
         history: Sequence[ExecutedStep],
         run_id: str,
         workspace: Path,
-        since: datetime,
         baseline: WorkspaceBaseline | None = None,
     ) -> VerificationOutcome:
         claims = detect_claims(answer.content)
@@ -136,7 +135,6 @@ class Verifier:
                 history=history,
                 run_id=run_id,
                 workspace=workspace,
-                since=since,
                 baseline=baseline,
             )
             all_ok = all_ok and ok
@@ -152,11 +150,10 @@ class Verifier:
         history: Sequence[ExecutedStep],
         run_id: str,
         workspace: Path,
-        since: datetime,
         baseline: WorkspaceBaseline | None,
     ) -> tuple[bool, str]:
         if claim is Claim.FILE_WRITTEN:
-            return _check_file_written(evidence, workspace=workspace, since=since)
+            return _check_file_written(evidence, workspace=workspace, baseline=baseline)
         if claim is Claim.PATCH_APPLIED:
             return _check_patch_applied(
                 evidence, workspace=workspace, baseline=baseline
@@ -166,36 +163,49 @@ class Verifier:
         )
 
 
+def _file_changed_since_baseline(
+    item: FileEvidence,
+    *,
+    workspace: Path,
+    baseline: WorkspaceBaseline,
+) -> tuple[bool, str] | None:
+    """Compare one evidence path against its run-start fingerprint.
+
+    Returns ``None`` when the path is unresolvable or not fingerprintable
+    (e.g. deleted, or a directory) so the caller can move to the next evidence
+    item. Otherwise returns ``(changed, note)`` — ``changed`` is True when the
+    content fingerprint differs from the baseline, including the case of a file
+    that did not exist at run start (``before is None``).
+    """
+    try:
+        resolved = resolve_in_workspace(item.path, workspace)
+        relative = resolved.relative_to(workspace.resolve()).as_posix()
+    except Exception:
+        return None
+    after = _fingerprint(resolved)
+    if after is None:
+        return None
+    before = baseline.files.get(relative)
+    if before != after:
+        return True, f"{item.path}: content differs from run-start baseline"
+    return False, f"{item.path}: unchanged since run-start baseline"
+
+
 def _check_file_written(
     evidence: Sequence[CommandEvidence | FileEvidence],
     *,
     workspace: Path,
-    since: datetime,
+    baseline: WorkspaceBaseline | None,
 ) -> tuple[bool, str]:
+    if baseline is None:
+        return False, "run has no workspace baseline"
     for item in evidence:
         if not isinstance(item, FileEvidence) or item.kind != "file":
             continue
-        try:
-            # Argument order is (path, workspace_root) — see
-            # harness.security.workspace.resolve_in_workspace. Confinement is
-            # still enforced; an evidence path outside the workspace is
-            # skipped, not trusted.
-            resolved = resolve_in_workspace(item.path, workspace)
-        except Exception:
-            continue
-        if not resolved.exists():
-            continue
-        mtime = datetime.fromtimestamp(resolved.stat().st_mtime, tz=since.tzinfo)
-        if mtime >= since:
-            note = (
-                f"{item.path} exists, modified {mtime.isoformat()} "
-                f"(run started {since.isoformat()})"
-            )
-            return True, note
-    return False, (
-        "no evidence path resolves to a file that exists with an mtime "
-        "advanced since the run started"
-    )
+        result = _file_changed_since_baseline(item, workspace=workspace, baseline=baseline)
+        if result is not None:
+            return result
+    return False, "no evidence path changed since the run-start baseline"
 
 
 def _check_patch_applied(
@@ -209,15 +219,9 @@ def _check_patch_applied(
     for item in evidence:
         if not isinstance(item, FileEvidence) or item.kind != "patch":
             continue
-        try:
-            resolved = resolve_in_workspace(item.path, workspace)
-            relative = resolved.relative_to(workspace.resolve()).as_posix()
-        except Exception:
-            continue
-        before = baseline.files.get(relative)
-        after = _fingerprint(resolved)
-        if before != after:
-            return True, f"{item.path}: content differs from run-start baseline"
+        result = _file_changed_since_baseline(item, workspace=workspace, baseline=baseline)
+        if result is not None:
+            return result
     return False, "no evidence path changed since the run-start baseline"
 
 
@@ -248,26 +252,40 @@ def _fingerprint(path: Path) -> str | None:
 
 
 def capture_workspace_baseline(workspace: Path) -> WorkspaceBaseline:
-    """Capture Git metadata and content fingerprints before tool execution."""
+    """Capture content fingerprints of every relevant file before tool execution.
+
+    Git-independent: the workspace tree is walked directly with ``os.walk``, so
+    non-Git workspaces and ``.gitignore``'d files are included — an unchanged
+    existing file must never read as a run-time change. ``.git/`` internals are
+    skipped (constant churn, never an evidence target). Git-derived summary
+    fields (``head_sha``, ``status_sha256``, ``diff_sha256``) remain
+    best-effort and are ``None`` / empty-hash outside a Git repo, kept for audit
+    continuity; only ``files`` is consulted for evidence checks.
+    """
     root = workspace.resolve()
     head = _git_output(root, "rev-parse", "HEAD").decode("utf-8", "replace").strip()
     status = _git_output(root, "status", "--porcelain=v1", "-z")
     diff = _git_output(root, "diff", "--binary", "HEAD") if head else b""
-    listed = _git_output(
-        root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
-    )
+
     files: dict[str, str] = {}
-    for raw in listed.split(b"\0"):
-        if not raw:
-            continue
-        relative = raw.decode("utf-8", "surrogateescape")
-        try:
-            resolved = resolve_in_workspace(relative, root)
-        except Exception:
-            continue
-        fingerprint = _fingerprint(resolved)
-        if fingerprint is not None:
-            files[relative] = fingerprint
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        # Prune .git in place so os.walk does not descend into it.
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in filenames:
+            full = Path(dirpath, name)
+            try:
+                relative = full.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            try:
+                resolved = resolve_in_workspace(relative, root)
+            except Exception:
+                # Escaping symlinks and out-of-workspace paths are skipped,
+                # not trusted — confinement is enforced on the baseline too.
+                continue
+            fingerprint = _fingerprint(resolved)
+            if fingerprint is not None:
+                files[relative] = fingerprint
     return WorkspaceBaseline(
         head_sha=head or None,
         status_sha256=hashlib.sha256(status).hexdigest(),

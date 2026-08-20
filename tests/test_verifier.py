@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -53,7 +52,6 @@ def test_test_claim_requires_successful_test_command(
         history=[step],
         run_id="run-1",
         workspace=tmp_path,
-        since=datetime.now(UTC),
     )
 
     assert outcome.verified is verified
@@ -79,7 +77,6 @@ def test_test_claim_rejects_evidence_from_wrong_step_run_or_tool(
         history=[step],
         run_id="run-1",
         workspace=tmp_path,
-        since=datetime.now(UTC),
     )
 
     assert outcome.verified is False
@@ -107,7 +104,6 @@ def test_command_claim_requires_matching_command_kind(
         history=[_command_step(command, exit_code=0)],
         run_id="run-1",
         workspace=tmp_path,
-        since=datetime.now(UTC),
     )
 
     assert outcome.verified is True

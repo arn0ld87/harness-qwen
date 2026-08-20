@@ -179,7 +179,6 @@ class AgentLoop:
             history=self._executed,
             run_id=self.run_id,
             workspace=self.workspace,
-            since=state.created_at,
             baseline=state.workspace_baseline,
         )
         if not outcome.verified:
