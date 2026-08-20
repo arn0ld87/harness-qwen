@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from harness import __version__
+from harness.cli_chat import chat as chat_command
 from harness.cli_inspect import config_app, memory_app
 from harness.cli_run import run as run_command
 from harness.config import ConfigError, load_config
@@ -365,6 +366,7 @@ def model_info(
 
 
 app.command("run")(run_command)
+app.command("chat")(chat_command)
 
 
 @app.command()

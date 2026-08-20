@@ -105,7 +105,22 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    protokolliert, DENY bleibt DENY.
 5. Systemprompt geschaerft, nachdem das 35B-Modell im echten Lauf einen Plan
    statt einer Aenderung lieferte.
-- [ ] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
+- [x] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
+
+#### Sub-Slice 14.1 — Dieselbe Maschine, ein Mensch dazwischen
+1. Kein zweiter Agent-Loop: jeder Turn ist ein Lauf desselben `AgentLoop`
+   gegen denselben Store. Eine zweite Stelle, die Budgets, Verifikation und
+   die Sicherheitsgrenze durchsetzt, waere die, die auseinanderlaeuft.
+2. Das Session-Ziel steht im gecachten Prefix und wird von der ersten
+   Nachricht gesetzt. Folgenachrichten gehen in die Append-Zone — ein Ziel
+   pro Turn wuerde den Prefix umschreiben und pro Eingabe ~25 s kosten.
+3. Die Nachricht wird in den persistierten RuntimeState geschrieben, nicht
+   auf den Assembler: der Loop restauriert diesen Zustand beim Eintritt und
+   wuerde alles ueberschreiben, was vorher gesetzt wurde. Damit ist der Turn
+   auch resumierbar.
+4. Bestaetigungen sind hier eine echte Entscheidung eines Menschen, mit
+   Kommando und Begruendung des Classifiers vor Augen.
+5. `/status`, `/context`, `/usage`, `/help`, `/exit`.
 - [x] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
 
 #### Sub-Slice 15.1 — Inspektion ohne SQLite-Handarbeit
