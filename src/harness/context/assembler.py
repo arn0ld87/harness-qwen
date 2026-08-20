@@ -215,6 +215,12 @@ class PromptAssembler:
         self._tools = tuple(tools)
 
     @property
+    def task(self) -> str:
+        """The current task segment — read-only, for snapshotting before a
+        change a caller intends to revert (e.g. a benchmark violation probe)."""
+        return self._task
+
+    @property
     def invalidations(self) -> list[InvalidationRecord]:
         return list(self._invalidations)
 

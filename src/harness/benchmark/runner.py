@@ -42,6 +42,7 @@ from harness.benchmark.models import (
     ModelFingerprint,
     Phase,
     ResourceSample,
+    RuntimeFingerprint,
     SampleMetrics,
 )
 from harness.benchmark.resources import sample_resources as default_resources
@@ -111,26 +112,14 @@ class BenchmarkRunner:
         warnings = list(self.resolved.warnings)
         if identity.identity_detail:
             warnings.append(identity.identity_detail)
-        model, model_warning = await self._model_fingerprint()
-        if model_warning:
-            warnings.append(model_warning)
+        fingerprint, model_warnings = await self.build_fingerprint(identity)
+        warnings.extend(model_warnings)
 
         run = BenchmarkRun(
             run_id=run_id or self._new_run_id(started_at),
             suite=suite.name,
             started_at=started_at,
-            fingerprint=Fingerprint(
-                host=self._host_fingerprint(),
-                runtime=identity,
-                model=model,
-                harness_version=__version__,
-                python_version=platform.python_version(),
-                config=self.resolved.as_dict(),
-                config_provenance={
-                    path: f"{origin}: {source}"
-                    for path, (origin, source) in self.resolved.provenance().items()
-                },
-            ),
+            fingerprint=fingerprint,
             warnings=warnings,
         )
 
@@ -228,6 +217,39 @@ class BenchmarkRunner:
         directory of artefacts should list in the order they were made.
         """
         return f"bench-{started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+
+    async def build_fingerprint(
+        self, identity: RuntimeFingerprint | None = None
+    ) -> tuple[Fingerprint, list[str]]:
+        """Assemble the run fingerprint from its three parts.
+
+        Shared by ``run`` and the prefix-invariant probe (#22): both need the
+        same host/model/runtime attribution so a cache report stays comparable
+        to a capability run. ``identity`` may be omitted by a caller that has
+        not already probed the runtime; it is probed here with the runner's
+        injectable port probes. Returns the fingerprint and any warnings the
+        model fingerprint surfaced (an unreachable model is a warning, not a
+        stop).
+        """
+        if identity is None:
+            identity = await probe_identity(
+                self.resolved.config, self.handle,
+                inspect=self._inspect, verify=self._verify,
+            )
+        model, model_warning = await self._model_fingerprint()
+        warnings = [model_warning] if model_warning else []
+        return Fingerprint(
+            host=self._host_fingerprint(),
+            runtime=identity,
+            model=model,
+            harness_version=__version__,
+            python_version=platform.python_version(),
+            config=self.resolved.as_dict(),
+            config_provenance={
+                path: f"{origin}: {source}"
+                for path, (origin, source) in self.resolved.provenance().items()
+            },
+        ), warnings
 
     def _host_fingerprint(self) -> HostFingerprint:
         profile = self.profile

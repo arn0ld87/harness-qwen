@@ -125,6 +125,7 @@ harness run [OPTIONS]      # run an agent on a task (requires a running endpoint
 harness chat [OPTIONS]     # interactive turn-based session (same loop as run)
 harness benchmark capability [OPTIONS]  # run the model-capability suite, write a JSON artefact
 harness benchmark compare A B           # set two run artefacts side by side
+harness benchmark prefix [OPTIONS]      # probe the prefix invariant: hash stable, cache hitting
 ```
 
 The inspection commands (`config show`, `memory inspect`) take `--json` for
@@ -140,7 +141,12 @@ whether the delta is a capability change or a fingerprint that moved. An
 invalid run (serving process moved, wrong flags) exits 3, not 0 — a caller
 that treats 0 as "trustworthy measurement" cannot buy one. The canonical
 `flags` and `tasks` suites land with #20 and #21; until then either subcommand
-runs a custom suite via `--suite`.
+runs a custom suite via `--suite`. `benchmark prefix` drives the prompt
+assembler through a scripted step sequence and checks the prefix contract the
+whole cache design rests on: the hash must not move across append-zone growth
+and the cache must keep hitting once warm. A violation or cache anomaly exits
+3; `--probe-undeclared` adds an undeclared change to verify the run catches the
+bug rather than papering over it.
 
 ## Documentation
 

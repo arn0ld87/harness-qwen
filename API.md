@@ -563,6 +563,83 @@ artefact. The invalidated run is the evidence for its own invalidation.
 No sample carries model output. Token counts, timings, finish reason and a
 deterministic verdict — never the response text and never reasoning.
 
+### Prefix invariant (#22)
+
+```python
+class StepKind(StrEnum):              # initial | role | tool_result | retrieval
+    ...                               #   | declared_invalidation | undeclared_task
+
+class PrefixStep(BaseModel):          # one scripted action on the assembler
+    kind: StepKind
+    role: Role | None = None          # role
+    tool: str | None = None           # tool_result
+    tool_content: str | None = None
+    retrieval_text: str | None = None # retrieval
+    retrieval_source: str = "retrieval"
+    invalidation_reason: InvalidationReason | None = None  # declared_invalidation
+    invalidation_note: str = ""
+    new_task: str | None = None       # declared_invalidation | undeclared_task
+    new_repo_map: str | None = None
+
+class PrefixStepResult(BaseModel):    # prefix hash + cache accounting per call
+    index: int
+    kind: StepKind
+    prefix_hash: str
+    prefix_tokens: int
+    prompt_tokens: int
+    cached_tokens: int
+    reprocessed_tokens: int
+    cache_hit_ratio: float
+    declared_invalidation: InvalidationRecord | None = None
+
+class PrefixViolationRecord(BaseModel):
+    at_step: int
+    kind: StepKind
+    expected: str
+    actual: str
+    segments: list[str]
+
+class PrefixInvariantReport(BaseModel):
+    schema_version: int = 1
+    run_id: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    fingerprint: Fingerprint | None = None
+    steps: list[PrefixStepResult]
+    invalidations: list[InvalidationRecord]
+    violations: list[PrefixViolationRecord]    # undeclared changes; even one invalidates
+    anomalies: list[int]                       # stable prefix, cache missed (post-cold)
+    cache_hit_ratio: float                     # aggregated over warm steps
+    total_reprocessed_tokens: int
+    discarded_output_tokens: int               # reprocessing as output-not-produced (§1)
+    valid: bool
+
+async def run_prefix_invariant(
+    provider, *, system, task, tools=(), repo_map="", steps=(),
+    max_tokens=64, run_id=None, fingerprint=None, budget=None,
+    economics=None, now=None,
+) -> PrefixInvariantReport: ...
+
+def render_cache_report(report) -> str: ...
+```
+
+`run_prefix_invariant` drives a real `PromptAssembler` through the step
+sequence and calls the provider at each step. The invariant has two halves:
+the prefix hash must not move across append-zone growth (role, tool results,
+retrieval), and the cache must keep hitting once warm. A `declared_invalidation`
+step is the one legitimate hash move — declared first, attributed to a reason,
+recorded. An `undeclared_task` step is the violation probe: it changes the task
+without declaring, the assembler raises `PrefixViolation`, and the run catches
+it, records the violation with the offending segment, reverts the mutation, and
+is marked invalid. An anomaly — a warm step whose prefix matched but whose
+cache missed — is its own kind of invalid: the hash held, the cache the
+architecture amortises on did not.
+
+`harness benchmark prefix` runs the built-in probe (or a `--steps` JSON file),
+writes a JSON artefact, and exits 0 (held), 3 (violation or anomaly), 1
+(execution failure), or 2 (configuration error). `--probe-undeclared` appends
+the violation probe to verify the run catches the bug it exists for.
+
 ---
 
 ## Runtime HTTP surface

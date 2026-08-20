@@ -31,10 +31,15 @@ from harness.benchmark import (
     BenchmarkRun,
     BenchmarkRunner,
     BenchmarkSuite,
+    PrefixInvariantReport,
+    PrefixStep,
+    StepKind,
     load_suite,
     read_run,
+    render_cache_report,
     render_comparison,
     render_summary,
+    run_prefix_invariant,
     write_run,
 )
 from harness.config import ConfigError, ResolvedConfig, load_config
@@ -350,6 +355,171 @@ def compare(
         console.print(render_comparison(run_a, run_b))
 
     raise typer.Exit(EXIT_OK if run_a.valid and run_b.valid else EXIT_INVALID)
+
+
+# -- prefix invariant (#22) ------------------------------------------------
+
+
+# The built-in probe: every append-zone action once, then a declared
+# invalidation. It exercises the whole invariant — the hash must hold across
+# the three appends and then move once, legitimately, on the declared change.
+# A JSON file supplied via ``--steps`` overrides all four fields.
+_DEFAULT_PROBE: dict[str, object] = {
+    "system": "You are a careful agent working on a Python codebase.",
+    "task": "Fix the failing test in tests/test_main.py.",
+    "repo_map": "src/  main.py\ntests/  test_main.py",
+    "steps": [
+        {"kind": "role", "role": "coder"},
+        {"kind": "tool_result", "tool": "run", "tool_content": "1 passed"},
+        {"kind": "retrieval", "retrieval_text": "fact: the cache is sacred"},
+        {"kind": "declared_invalidation",
+         "invalidation_reason": "task_changed", "invalidation_note": "new goal",
+         "new_task": "Fix a different test instead."},
+    ],
+}
+
+StepsOpt = Annotated[
+    Path | None,
+    typer.Option(
+        "--steps",
+        help="JSON file with system/task/repo_map/steps (overrides the built-in probe).",
+    ),
+]
+ProbeUndeclaredOpt = Annotated[
+    bool,
+    typer.Option(
+        "--probe-undeclared",
+        help="Append an undeclared task change to verify the run catches it.",
+    ),
+]
+MaxTokensOpt = Annotated[
+    int,
+    typer.Option(
+        "--max-tokens",
+        help=(
+            "Max generation tokens per step (keep small; "
+            "this measures the prefix, not the output)."
+        ),
+    ),
+]
+
+
+def _load_probe(steps_file: Path | None) -> dict[str, object]:
+    """The built-in probe unless a JSON file overrides it.
+
+    The file is a serialised :class:`PrefixStep` sequence plus the three prefix
+    segments; pydantic validates the step kinds and reason codes when the runner
+    builds them, so a typo in the file is a loud error rather than a silent
+    no-op step.
+    """
+    if steps_file is None:
+        return _DEFAULT_PROBE
+    raw = json.loads(steps_file.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{steps_file}: a steps file must be a JSON object")
+    return raw
+
+
+async def _run_prefix(
+    resolved: ResolvedConfig, probe: dict[str, object], *,
+    run_id: str | None, max_tokens: int, probe_undeclared: bool,
+) -> PrefixInvariantReport:
+    runner, cleanup = await build_runner(resolved)
+    try:
+        steps_raw = probe.get("steps") or []
+        if not isinstance(steps_raw, list):
+            raise ValueError("steps file: 'steps' must be a list")
+        steps = [PrefixStep.model_validate(s) for s in steps_raw]
+        if probe_undeclared:
+            steps.append(PrefixStep(kind=StepKind.UNDECLARED_TASK, new_task="probe: undeclared"))
+        fingerprint, _ = await runner.build_fingerprint()
+        return await run_prefix_invariant(
+            runner.provider,
+            system=str(probe.get("system", "")),
+            task=str(probe.get("task", "")),
+            repo_map=str(probe.get("repo_map", "")),
+            steps=steps,
+            max_tokens=max_tokens,
+            run_id=run_id,
+            fingerprint=fingerprint,
+        )
+    finally:
+        await cleanup()
+
+
+@benchmark_app.command("prefix")
+def prefix(
+    out: OutOpt = DEFAULT_OUT,
+    run_id: RunIdOpt = None,
+    base_url: BaseUrlOpt = None,
+    attach: AttachOpt = None,
+    config: ConfigOpt = None,
+    profile: ProfileOpt = None,
+    steps: StepsOpt = None,
+    max_tokens: MaxTokensOpt = 16,
+    probe_undeclared: ProbeUndeclaredOpt = False,
+    json_output: JsonOpt = False,
+) -> None:
+    """Run the prefix-invariant probe and report cache behaviour.
+
+    Drives the prompt assembler through a scripted step sequence and checks the
+    two halves of the prefix contract: the hash must not move across append-zone
+    growth, and the cache must keep hitting once warm. A declared invalidation
+    is the one legitimate hash move; ``--probe-undeclared`` adds a change that
+    is *not* declared, to verify the run catches the bug rather than papering
+    over it.
+
+    Exit codes: 0 the invariant held, 3 a violation or cache anomaly made the
+    run invalid, 1 an execution failure (runtime, provider), 2 a configuration
+    error.
+    """
+    try:
+        if profile is not None:
+            resolved = load_config(
+                config_file=config,
+                overrides=_overrides(base_url, attach),
+                profile_file=profile,
+            )
+        else:
+            resolved = load_config(
+                config_file=config, overrides=_overrides(base_url, attach)
+            )
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(EXIT_CONFIG) from exc
+
+    try:
+        probe = _load_probe(steps)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(EXIT_ERROR) from exc
+
+    for warning in resolved.warnings:
+        err_console.print(f"[yellow]![/yellow] {warning}")
+
+    try:
+        report = asyncio.run(_run_prefix(
+            resolved, probe, run_id=run_id, max_tokens=max_tokens,
+            probe_undeclared=probe_undeclared,
+        ))
+    except _RUNTIME_FAILURES as exc:
+        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
+        raise typer.Exit(EXIT_ERROR) from exc
+    except KeyboardInterrupt:
+        console.print("[yellow]interrupted[/yellow]")
+        raise typer.Exit(EXIT_ERROR) from None
+
+    path = out / f"{report.run_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    if json_output:
+        console.print_json(report.model_dump_json())
+    else:
+        console.print(render_cache_report(report))
+    err_console.print(f"[dim]artefact: {path}[/dim]")
+
+    raise typer.Exit(EXIT_OK if report.valid else EXIT_INVALID)
 
 
 __all__ = [

@@ -35,8 +35,9 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/cli_run.py` | `run` command with resume, overrides, `--approve-confirmable` |
 | `src/harness/cli_chat.py` | `chat` command: `/status`, `/context`, `/usage`, `/exit` |
 | `src/harness/cli_inspect.py` | `config show` and `memory inspect` with `--json` |
-| `src/harness/cli_benchmark.py` | `benchmark` command group: `capability`/`flags`/`tasks` runs and `compare`, exit codes for valid/invalid/config/execution-failure |
+| `src/harness/cli_benchmark.py` | `benchmark` command group: `capability`/`flags`/`tasks` runs, `compare`, and `prefix` invariant probe; exit codes for valid/invalid/config/execution-failure |
 | `src/harness/benchmark/` | Reproducible capability and performance runs: fingerprint, warmup/measure phases, percentiles, JSON artefact |
+| `src/harness/benchmark/prefix_invariant.py` | Drives a real `PromptAssembler` through a scripted step sequence and reports whether the prefix hash held and the cache kept hitting (#22) |
 
 ## Code style
 
@@ -72,7 +73,7 @@ client.
 | Package | Floor | Measured 2026-08-20 |
 |---|---|---|
 | `agent` | 88% | 91.2% |
-| `benchmark` | 93% | 95.7% |
+| `benchmark` | 93% | 95.6% |
 | `config` | 95% | 98.3% |
 | `diagnostics` | 85% | 86.5% |
 | `context` | 80% | 83.5% |
@@ -85,7 +86,7 @@ client.
 | `security/classifier.py` (file) | 97% | 99.5% |
 | `security/shellsplit.py` (file) | 100% | 100% |
 | `tools/shell.py` (file) | 85% | 91.5% |
-| total | 66% | 81.3% |
+| total | 66% | 82.0% |
 
 Three files carry their own floor because a package average hides its riskiest
 member. `tools` is held down by `filesystem.py` and `git.py` having no unit

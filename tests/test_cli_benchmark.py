@@ -402,3 +402,110 @@ def test_capability_runs_against_the_served_model(tmp_path: Path) -> None:
     )
     assert result.exit_code in {EXIT_OK, EXIT_INVALID, EXIT_ERROR}
     assert "benchmark run" in result.stdout or "identity" in result.stdout.lower()
+
+
+# -- prefix invariant (#22) ------------------------------------------------
+
+
+def test_prefix_runs_the_builtin_probe_and_exits_zero(tmp_path: Path) -> None:
+    """The built-in probe drives the assembler through every append kind and a
+    declared invalidation; the hash holds across the appends and the run is
+    valid, so a caller sees exit 0 and the artefact on disk."""
+    provider = FakeProvider(["ok"], repeat_last=True)
+    result = _invoke(
+        "prefix", "--out", str(tmp_path / "runs"), "--run-id", "prefix-smoke",
+        factory=_factory(provider), env=_env(tmp_path),
+    )
+
+    assert result.exit_code == EXIT_OK
+    assert "prefix invariant valid" in result.stdout
+    assert "prefix-smoke" in result.stdout
+    artefact = tmp_path / "runs" / "prefix-smoke.json"
+    assert artefact.exists()
+    payload = json.loads(artefact.read_text(encoding="utf-8"))
+    assert payload["valid"] is True
+    assert payload["schema_version"] == 1
+    assert len(payload["steps"]) == 5  # cold + role + tool + retrieval + declared
+
+
+def test_prefix_probe_undeclared_exits_three(tmp_path: Path) -> None:
+    """``--probe-undeclared`` appends an undeclared task change: the run must
+    catch it, print VIOLATION, and return invalid — exit 3, not 0."""
+    provider = FakeProvider(["ok"], repeat_last=True)
+    result = _invoke(
+        "prefix", "--probe-undeclared", "--out", str(tmp_path / "runs"),
+        factory=_factory(provider), env=_env(tmp_path),
+    )
+
+    assert result.exit_code == EXIT_INVALID
+    assert "VIOLATION" in result.stdout
+    assert "INVALID" in result.stdout
+    artefacts = list((tmp_path / "runs").glob("*.json"))
+    assert len(artefacts) == 1
+    assert json.loads(artefacts[0].read_text("utf-8"))["valid"] is False
+
+
+def test_prefix_json_output_emits_the_report(tmp_path: Path) -> None:
+    provider = FakeProvider(["ok"], repeat_last=True)
+    result = _invoke(
+        "prefix", "--json", "--out", str(tmp_path / "runs"), "--run-id", "prefix-json",
+        factory=_factory(provider), env=_env(tmp_path),
+    )
+
+    assert result.exit_code == EXIT_OK
+    payload = json.loads(result.stdout)
+    assert payload["run_id"] == "prefix-json"
+    assert payload["valid"] is True
+    assert payload["cache_hit_ratio"] >= 0.0
+
+
+def test_prefix_runs_a_custom_steps_file(tmp_path: Path) -> None:
+    """A JSON file overrides the built-in probe: the runner builds the steps
+    from it, so a project can pin its own sequence without editing code."""
+    steps_file = tmp_path / "steps.json"
+    steps_file.write_text(json.dumps({
+        "system": "You are a careful agent.",
+        "task": "Echo ok.",
+        "repo_map": "",
+        "steps": [
+            {"kind": "role", "role": "coder"},
+            {"kind": "tool_result", "tool": "run", "tool_content": "ok"},
+        ],
+    }), encoding="utf-8")
+    provider = FakeProvider(["ok"], repeat_last=True)
+    result = _invoke(
+        "prefix", "--steps", str(steps_file), "--out", str(tmp_path / "runs"),
+        "--run-id", "custom", factory=_factory(provider), env=_env(tmp_path),
+    )
+
+    assert result.exit_code == EXIT_OK
+    artefact = json.loads((tmp_path / "runs" / "custom.json").read_text("utf-8"))
+    # cold + role + tool = three steps from the custom file.
+    assert len(artefact["steps"]) == 3
+
+
+def test_prefix_a_broken_configuration_exits_two(tmp_path: Path) -> None:
+    provider = FakeProvider(["ok"], repeat_last=True)
+    env = _env(tmp_path)
+    env["HARNESS_RUNTIME_PORT"] = "nope"
+    result = _invoke(
+        "prefix", "--out", str(tmp_path / "runs"),
+        factory=_factory(provider), env=env,
+    )
+
+    assert result.exit_code == EXIT_CONFIG
+    assert "Traceback" not in result.stdout
+
+
+@pytest.mark.local_llm
+def test_prefix_runs_against_the_served_model(tmp_path: Path) -> None:
+    """The prefix probe works against a real llama-server (attached, not
+    started here). Asserts the run completes and records a verdict, not that
+    the cache hits — a real server's cache behaviour is a measurement."""
+    result = runner.invoke(
+        app,
+        ["benchmark", "prefix", "--attach", "--out", str(tmp_path / "runs")],
+        env={**_env(tmp_path), "HARNESS_RUNTIME_ATTACH": "true"},
+    )
+    assert result.exit_code in {EXIT_OK, EXIT_INVALID, EXIT_ERROR}
+    assert "prefix invariant" in result.stdout or "identity" in result.stdout.lower()

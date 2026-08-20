@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from harness.benchmark.models import BenchmarkRun, CaseResult
+from harness.benchmark.prefix_invariant import PrefixInvariantReport
 from harness.benchmark.stats import Distribution
 from harness.telemetry.redact import redact
 
@@ -96,6 +97,55 @@ def render_summary(run: BenchmarkRun) -> str:
     return "\n".join(lines)
 
 
+def render_cache_report(report: PrefixInvariantReport) -> str:
+    """A plain-text report of a prefix-invariant run.
+
+    The first line states the verdict — valid, or why not. Then one row per
+    step with the prefix hash (short) and the cache accounting side by side,
+    so a reader can see the hash hold while the cache hits, and the one step
+    where either breaks. Aggregates close the report: the warm cache-hit ratio,
+    the reprocessed tokens, and the output those tokens could have produced.
+    """
+    lines: list[str] = []
+
+    if report.violations:
+        for v in report.violations:
+            segs = ", ".join(v.segments) or "?"
+            lines.append(f"VIOLATION at step {v.at_step} ({v.kind.value}): "
+                         f"prefix moved on {segs} — undeclared change")
+    if report.anomalies:
+        lines.append(f"ANOMALY at step{'s' if len(report.anomalies) > 1 else ''} "
+                     f"{', '.join(str(i) for i in report.anomalies)}: "
+                     "prefix stable but cache missed")
+    verdict = "valid" if report.valid else "INVALID"
+    lines.append(f"prefix invariant {verdict}   run {report.run_id}")
+    lines.append(f"started  {report.started_at.isoformat()}{_prefix_duration(report)}")
+
+    if report.fingerprint is not None:
+        lines.append(f"host     {report.fingerprint.host.hostname or 'unknown'}")
+        lines.append(f"model    {report.fingerprint.model.model_id or 'unknown'}")
+
+    lines.append("")
+    lines.append(_PREFIX_HEADER)
+    lines.extend(_prefix_step_row(step) for step in report.steps)
+
+    lines.append("")
+    pct = report.cache_hit_ratio * 100
+    lines.append(f"cache hit ratio (warm)   {pct:.0f}%")
+    lines.append(f"reprocessed tokens       {report.total_reprocessed_tokens}")
+    lines.append(f"discarded output tokens  {report.discarded_output_tokens}")
+
+    if report.invalidations:
+        lines.append("")
+        lines.append("invalidations:")
+        for record in report.invalidations:
+            reasons = ", ".join(r.value for r in record.reasons)
+            applied = "applied" if record.applied else "declared, not applied"
+            lines.append(f"  - {reasons} — {applied}")
+
+    return "\n".join(lines)
+
+
 def render_comparison(a: BenchmarkRun, b: BenchmarkRun) -> str:
     """Two runs side by side, and whether the delta between them means anything.
 
@@ -136,6 +186,32 @@ def _duration(run: BenchmarkRun) -> str:
         return ""
     seconds = (run.finished_at - run.started_at).total_seconds()
     return f"   finished {run.finished_at.isoformat()}   duration {seconds:.1f} s"
+
+
+# -- prefix-invariant report internals --------------------------------------
+
+
+_PREFIX_HEADER = (
+    f"{'#':>2}{'kind':<22}{'prefix hash':<11}"
+    f"{'prompt':>8}{'cached':>8}{'reproc':>8}{'hit':>7}"
+)
+
+
+def _prefix_duration(report: PrefixInvariantReport) -> str:
+    if report.finished_at is None:
+        return ""
+    seconds = (report.finished_at - report.started_at).total_seconds()
+    return f"   finished {report.finished_at.isoformat()}   duration {seconds:.1f} s"
+
+
+def _prefix_step_row(step) -> str:
+    """One row: index, kind, short hash, prompt/cached/reprocessed tokens, hit%."""
+    hit = step.cache_hit_ratio * 100
+    return (
+        f"{step.index:>2}{step.kind.value:<22}{step.prefix_hash[:8]:<11}"
+        f"{step.prompt_tokens:>8}{step.cached_tokens:>8}"
+        f"{step.reprocessed_tokens:>8}{hit:>6.0f}%"
+    )
 
 
 def _fingerprint_lines(run: BenchmarkRun) -> list[str]:
@@ -259,6 +335,7 @@ __all__ = [
     "artifact_path",
     "invalidate_artifact",
     "read_run",
+    "render_cache_report",
     "render_comparison",
     "render_summary",
     "write_run",

@@ -8,7 +8,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 
 - v0.2 Hardening (#5–#9, #33): COMPLETE
 - v0.3 Runtime & CLI (#10–#16): COMPLETE
-- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17, #18 und #19 abgeschlossen, #20–#22 offen
+- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17, #18, #19 und #22 abgeschlossen, #20–#21 offen (brauchen das echte Modell)
 - #27 `harness benchmark` CLI: abgeschlossen (siehe Phase D)
 
 ## Ausfuehrungsprotokoll
@@ -122,7 +122,11 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 - [x] #19 `benchmark/` Framework (ID, Fingerprint, Warmup/Mess, JSON, Perzentile)
 - [ ] #20 Flag-Sweep (Prozessidentitaet, Invaliditaetsregeln)
 - [ ] #21 Harness vs Plain Loop (Task-Suite, Metriken, cold/warm, negative Results)
-- [ ] #22 Cache-/Prefix-Invarianten (Prefix-Hash pro Call, Cache-Hit-Quote)
+- [x] #22 Cache-/Prefix-Invarianten (Prefix-Hash pro Call, Cache-Hit-Quote)
+  - `benchmark/prefix_invariant.py`: `run_prefix_invariant` treibt echten `PromptAssembler` durch Step-Sequenz, prüft Hash-Stabilität über Appends + Cache-Hit, fängt `PrefixViolation`, reportet Anomalien
+  - `benchmark prefix`-Subcommand mit `--steps`, `--probe-undeclared`, `--json`; Exit 0/3/1/2
+  - Unit-Tests für PromptAssembler-Vertrag (`test_context_assembler.py`, 11 Tests) und CacheEconomics §5 (`test_cache_economics.py`, 6 Tests) — die Lücken, die der Implementierung vorausgingen
+  - `render_cache_report` in `benchmark/report.py`
 
 ### Phase D — #27 `harness benchmark` CLI
 - [x] #27 CLI für Capability-, Flag- und Task-Benchmarks
