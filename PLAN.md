@@ -31,7 +31,17 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    Append-Hinweis an das Modell.
 6. Tests: Crash vor Side Effect, nach Side Effect/vor Checkpoint, nach
    Checkpoint, read-only Tool, Guard-Verhalten.
-- [ ] #9 CI: einmaliger Coverage-Lauf, --cov-fail-under, Capability-Marker, ruff+pytest--cov
+- [x] #9 CI: einmaliger Coverage-Lauf, --cov-fail-under, Capability-Marker, ruff+pytest--cov
+
+#### Sub-Slice 9.1 — Einmaliger Lauf und dokumentierte Coverage-Gates
+1. `scripts/coverage_gate.py`: liest `coverage.json`, prueft globale und
+   modulweise Mindestabdeckung, meldet jede Unterschreitung einzeln.
+2. Schwellen in `pyproject.toml` (`[tool.coverage_gate]`) — anhebbar ohne
+   Codeaenderung, Startwerte knapp unter dem Ist-Stand statt kuenstlich rot.
+3. Marker `sandbox` fuer bwrap-abhaengige Tests, zusaetzlich zum
+   bestehenden skipif; `local_llm` und `slow` bleiben unveraendert.
+4. CI: ein Testlauf mit Coverage statt zwei, `-ra` fuer sichtbare
+   Skip-Gruende, Gate als eigener Schritt mit eindeutiger Fehlermeldung.
 
 ### Phase B — v0.3 Runtime & CLI
 - [ ] #10 runtime/ Supervisor (Start/Stop/Health, PID, Attach, Crash, stdout secret-safe)

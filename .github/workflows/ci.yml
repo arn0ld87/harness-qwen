@@ -4,30 +4,62 @@ on:
   push:
   pull_request:
 
+# A second push supersedes the first: nothing here is worth two runners.
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseding a push on a branch is fine; on main it would leave a commit
+  # with no test result and no coverage verdict at all.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install bubblewrap
         # The shell sandbox is fail-closed on bwrap, so the isolation tests
         # need it present *and* allowed to unshare namespaces. Ubuntu blocks
         # unprivileged user namespaces via AppArmor by default; lifting that is
-        # best effort, and the tests skip rather than fail if it does not work.
+        # best effort. Tests carrying the `sandbox` marker skip rather than
+        # fail if it does not work, and the summary below records which of the
+        # two happened — a capability that quietly vanished on a runner
+        # otherwise looks exactly like one that passed.
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           if bwrap --unshare-all --ro-bind / / /usr/bin/true; then
-            echo "bwrap usable: sandbox tests will run"
+            echo "sandbox capability: **available** — \`sandbox\` tests run" \
+              >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "bwrap unusable: sandbox tests will skip"
+            echo "sandbox capability: **unavailable** — \`sandbox\` tests skip" \
+              >> "$GITHUB_STEP_SUMMARY"
           fi
+
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --extra dev
-      - run: uv run ruff check .
-      - run: uv run pytest
-      - run: uv run pytest --cov=harness --cov-report=term-missing
+
+      # --locked asserts uv.lock is current for pyproject.toml, so a dependency
+      # added without regenerating the lock fails here instead of resolving to
+      # something nobody pinned. Every `uv run` below carries --frozen for the
+      # same reason: uv re-locks by default, which would undo this one step
+      # later and turn a green CI into a coincidence.
+      - name: Install dependencies
+        run: uv sync --extra dev --locked
+
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+      # One run, with coverage. The suite used to run twice — the second pass
+      # measured what the first had already proven, at double the wall clock.
+      # `local_llm` stays deselected by addopts: no model, no GPU, no network.
+      - name: Test
+        run: >-
+          uv run --frozen pytest
+          --cov=harness --cov-report=term-missing --cov-report=json
+
+      - name: Coverage gate
+        run: uv run --frozen python scripts/coverage_gate.py

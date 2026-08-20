@@ -14,6 +14,7 @@ import socket
 import subprocess
 import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -51,9 +52,20 @@ def _bwrap_usable() -> bool:
 
 
 _BWRAP_AVAILABLE = _bwrap_usable()
-requires_bwrap = pytest.mark.skipif(
+_skip_without_bwrap = pytest.mark.skipif(
     not _BWRAP_AVAILABLE, reason="bubblewrap not installed or unusable"
 )
+
+
+def requires_bwrap(test: Any) -> Any:
+    """Mark a test as needing a real sandbox on the host.
+
+    Two markers in one: ``sandbox`` makes the capability selectable
+    (``-m sandbox`` to demand them, ``-m "not sandbox"`` to leave them out),
+    and the skipif keeps a machine without bubblewrap from failing tests it
+    was never able to run.
+    """
+    return pytest.mark.sandbox(_skip_without_bwrap(test))
 
 
 def _fake_bwrap(cmd: str, /, *_a, **_k) -> str | None:

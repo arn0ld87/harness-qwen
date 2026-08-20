@@ -16,3 +16,4 @@ benchmarks/results/
 runs/
 *.db
 *.sqlite3
+coverage.json

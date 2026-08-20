@@ -47,6 +47,41 @@ uv run harness doctor            # Probe hardware and runtime
 - **Tests requiring the local model** carry the `@pytest.mark.local_llm` decorator and are excluded by default.
 - **A feature without tests is unfinished.** Every code path must be exercised before merge.
 - **FakeProvider scripts** live in `tests/fixtures/model_responses/`. Add scenarios as JSON before writing the test.
+- **Capability markers**: `sandbox` marks tests needing a usable bubblewrap on
+  the host. They skip where it is absent rather than failing, so select them
+  with `-m "sandbox and not local_llm"` when you want to know they actually
+  ran. Spell out `not local_llm` every time: `-m` takes a single expression
+  and the command line replaces the one in `addopts`, so a bare `-m sandbox`
+  quietly re-enables the tests that need the 35B model served.
+
+### Coverage floors
+
+CI runs the suite once with coverage and then `scripts/coverage_gate.py`,
+which enforces a floor per package from `[tool.coverage_gate]` in
+`pyproject.toml`. Per package rather than one number for the tree: a single
+threshold either lets the agent loop rot or blocks work over the llama.cpp
+client.
+
+| Package | Floor | Measured 2026-08-20 |
+|---|---|---|
+| `agent` | 88% | 90.9% |
+| `context` | 80% | 83.2% |
+| `memory` | 75% | 77.9% |
+| `protocol` | 65% | 68.7% |
+| `security` | 50% | 53.5% |
+| `tools` | 40% | 44.2% |
+| `tools/shell.py` (file) | 85% | 90.6% |
+| total | 65% | 67.1% |
+
+`shell.py` carries its own floor because a package average hides its riskiest
+member: `tools` is held down by `filesystem.py` and `git.py` having no unit
+tests, which says nothing about the bubblewrap boundary.
+
+Floors start just below the measured baseline — a gate that ships red teaches
+everyone to ignore it. Raise them in `pyproject.toml`, no code change needed.
+`security` is the one to raise first: `rules.py` and `shellsplit.py` sit near
+31%, and this is the module where an untested path is a security claim nobody
+checked. Tracked in #32.
 
 ## Non-negotiables
 

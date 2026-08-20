@@ -30,6 +30,7 @@ The harness targets a model running at 16.5 tokens per second. Waiting for a ful
 | `uv run pytest -m local_llm` | Full agent tests with the real model (slow, local only) |
 | `uv run harness doctor` | Probe hardware profile and runtime readiness |
 | `uv run harness benchmark` | Run capability benchmarks from `benchmarks/model-capabilities.json` |
+| `uv run pytest --cov=harness --cov-report=json && uv run python scripts/coverage_gate.py` | What CI gates on: one measured run, then the per-package floors |
 
 ## Agent skills
 

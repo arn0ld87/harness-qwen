@@ -40,8 +40,36 @@ asyncio_mode = "auto"
 markers = [
     "local_llm: requires the real local model to be loaded and served (deselect with -m 'not local_llm')",
     "slow: takes more than a few seconds",
+    "sandbox: needs a usable bubblewrap on the host; skipped where it is not",
 ]
-addopts = "-m 'not local_llm' --strict-markers"
+# -ra prints why anything was skipped: a capability test that quietly vanished
+# on a runner looks exactly like a passing one otherwise.
+addopts = "-m 'not local_llm' --strict-markers -ra"
+
+# Coverage floors enforced by scripts/coverage_gate.py. Per package, because a
+# single number for the tree either lets the agent loop rot or blocks work over
+# the llama.cpp client. Set just below the measured baseline on 2026-08-20 —
+# high enough to catch a regression, not so high that the gate ships red.
+[tool.coverage_gate]
+total = 65.0
+
+[tool.coverage_gate.modules]
+agent = 88.0       # measured 90.9
+context = 80.0     # measured 83.2
+memory = 75.0      # measured 77.9
+protocol = 65.0    # measured 68.7
+security = 50.0    # measured 53.5 — lowest of the five and the one to raise
+                   # first: rules.py and shellsplit.py sit near 31% (#32).
+tools = 40.0       # measured 44.2, dragged down by filesystem.py and git.py
+                   # having no unit tests yet — see the file floor below.
+
+# A package average hides its riskiest member. shell.py is the bubblewrap
+# boundary: `tools` could stay above 40% while it rotted to nothing.
+[tool.coverage_gate.files]
+"src/harness/tools/shell.py" = 85.0   # measured 90.6
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 
 [tool.ruff]
 line-length = 100
