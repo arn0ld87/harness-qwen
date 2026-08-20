@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import socket
+import subprocess
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -20,16 +21,48 @@ import pytest
 from harness.core import NetworkMode
 from harness.tools.shell import _sandbox_argv, run_command
 
+_REAL_WHICH = shutil.which
+
 
 def _no_bwrap(_cmd: str, /, *_a, **_k) -> str | None:
     """shutil.which override that pretends bubblewrap is absent."""
     return None
 
 
-_BWRAP_AVAILABLE = shutil.which("bwrap") is not None
+def _bwrap_usable() -> bool:
+    """True when bwrap exists *and* the kernel lets it unshare namespaces.
+
+    Presence is not enough: on distributions that restrict unprivileged user
+    namespaces, bwrap is installed but every invocation fails. Tests that need
+    real isolation must skip in that case, not fail.
+    """
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        return False
+    try:
+        probe = subprocess.run(
+            [bwrap, "--unshare-all", "--ro-bind", "/", "/", "/usr/bin/true"],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
+_BWRAP_AVAILABLE = _bwrap_usable()
 requires_bwrap = pytest.mark.skipif(
-    not _BWRAP_AVAILABLE, reason="bubblewrap not installed"
+    not _BWRAP_AVAILABLE, reason="bubblewrap not installed or unusable"
 )
+
+
+def _fake_bwrap(cmd: str, /, *_a, **_k) -> str | None:
+    """shutil.which override that reports a bwrap binary without running it.
+
+    Lets the pure argv-construction tests assert the sandbox flags on any
+    machine; only tests that actually execute need a working bwrap.
+    """
+    return "/usr/bin/bwrap" if cmd == "bwrap" else _REAL_WHICH(cmd)
 
 
 def _approve(_command: str, _reason: str) -> bool:
@@ -79,22 +112,26 @@ def test_sandbox_argv_returns_none_when_bwrap_missing(tmp_path: Path) -> None:
 
 
 def test_default_network_is_isolated_in_argv(tmp_path: Path) -> None:
-    argv = _sandbox_argv(tmp_path, "ls", network=NetworkMode.ISOLATED)
+    with patch("harness.tools.shell.shutil.which", _fake_bwrap):
+        argv = _sandbox_argv(tmp_path, "ls", network=NetworkMode.ISOLATED)
     assert argv is not None
     assert "--unshare-net" in argv
 
 
 def test_explicit_network_allowed_omits_unshare_net(tmp_path: Path) -> None:
-    argv = _sandbox_argv(tmp_path, "ls", network=NetworkMode.ALLOWED)
+    with patch("harness.tools.shell.shutil.which", _fake_bwrap):
+        argv = _sandbox_argv(tmp_path, "ls", network=NetworkMode.ALLOWED)
     assert argv is not None
     assert "--unshare-net" not in argv
 
 
+@requires_bwrap
 def test_default_network_mode_is_audited_on_result(tmp_path: Path) -> None:
     result = run_command(tmp_path, "ls")
     assert result.network == NetworkMode.ISOLATED
 
 
+@requires_bwrap
 def test_network_allowed_without_approval_downgrades_to_isolated(
     tmp_path: Path,
 ) -> None:
@@ -105,6 +142,7 @@ def test_network_allowed_without_approval_downgrades_to_isolated(
     assert result.network == NetworkMode.ISOLATED
 
 
+@requires_bwrap
 def test_network_allowed_with_approval_is_audited(tmp_path: Path) -> None:
     result = run_command(
         tmp_path, "ls", network=NetworkMode.ALLOWED, confirm_callback=_approve,
@@ -112,6 +150,7 @@ def test_network_allowed_with_approval_is_audited(tmp_path: Path) -> None:
     assert result.network == NetworkMode.ALLOWED
 
 
+@requires_bwrap
 def test_network_allowed_approval_denied_downgrades_to_isolated(
     tmp_path: Path,
 ) -> None:
@@ -203,16 +242,19 @@ def test_string_isolated_still_unshares_net(tmp_path: Path) -> None:
     # NetworkMode is a StrEnum, so a decoded JSON argument arrives as a plain
     # ``str``. An identity check would miss it and silently omit
     # ``--unshare-net`` while the result still claimed "isolated".
-    argv = _sandbox_argv(tmp_path, "ls", network="isolated")
+    with patch("harness.tools.shell.shutil.which", _fake_bwrap):
+        argv = _sandbox_argv(tmp_path, "ls", network="isolated")
     assert argv is not None
     assert "--unshare-net" in argv
 
 
+@requires_bwrap
 def test_string_isolated_is_audited_as_enum(tmp_path: Path) -> None:
     result = run_command(tmp_path, "ls", network="isolated")
     assert result.network is NetworkMode.ISOLATED
 
 
+@requires_bwrap
 def test_string_allowed_without_approval_downgrades_to_isolated(
     tmp_path: Path,
 ) -> None:
@@ -222,6 +264,7 @@ def test_string_allowed_without_approval_downgrades_to_isolated(
     assert result.network is NetworkMode.ISOLATED
 
 
+@requires_bwrap
 def test_string_allowed_with_approval_is_audited(tmp_path: Path) -> None:
     result = run_command(
         tmp_path, "ls", network="allowed", confirm_callback=_approve,

@@ -9,6 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install bubblewrap
+        # The shell sandbox is fail-closed on bwrap, so the isolation tests
+        # need it present *and* allowed to unshare namespaces. Ubuntu blocks
+        # unprivileged user namespaces via AppArmor by default; lifting that is
+        # best effort, and the tests skip rather than fail if it does not work.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if bwrap --unshare-all --ro-bind / / /usr/bin/true; then
+            echo "bwrap usable: sandbox tests will run"
+          else
+            echo "bwrap unusable: sandbox tests will skip"
+          fi
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
