@@ -9,6 +9,7 @@ plausible number.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -17,6 +18,8 @@ from rich.console import Console
 from rich.table import Table
 
 from harness import __version__
+from harness.config import ConfigError, load_config
+from harness.diagnostics import Diagnosis, Severity, diagnose
 from harness.discovery import build_profile, save_profile
 from harness.discovery.models import HardwareProfile
 
@@ -225,6 +228,24 @@ def _render_warnings(p: HardwareProfile) -> None:
         console.print(f"  [yellow]•[/yellow] {w}")
 
 
+_SEVERITY_STYLE = {
+    Severity.OK: ("[green]ok[/green]  ", ""),
+    Severity.WARN: ("[yellow]warn[/yellow]", "yellow"),
+    Severity.FAIL: ("[red]fail[/red]", "red"),
+    Severity.SKIP: ("[dim]skip[/dim]", "dim"),
+}
+
+
+def _render_checks(diagnosis: Diagnosis) -> None:
+    console.print("\n[bold]Readiness[/bold]")
+    for check in diagnosis.checks:
+        marker, style = _SEVERITY_STYLE[check.severity]
+        body = f"[{style}]{check.detail}[/{style}]" if style else check.detail
+        console.print(f"  {marker}  [cyan]{check.name}[/cyan]  {body}")
+        if check.hint:
+            console.print(f"        [dim]{check.hint}[/dim]")
+
+
 @app.command()
 def doctor(
     model: Annotated[
@@ -239,8 +260,37 @@ def doctor(
         Path,
         typer.Option("--profile-path", help="Where to write the profile."),
     ] = DEFAULT_PROFILE_PATH,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the readiness checks as JSON and exit."),
+    ] = False,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Exit non-zero on warnings too."),
+    ] = False,
 ) -> None:
-    """Probe hardware, runtime and model, then report what is known and what is not."""
+    """Probe hardware, runtime and model, then report what is known and what is not.
+
+    Exit codes: 0 usable, 1 something would stop a run, 2 warnings under
+    ``--strict``. Nothing here changes the system apart from writing the
+    hardware profile, which ``--no-save`` turns off.
+    """
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    diagnosis = asyncio.run(diagnose(config))
+
+    if as_json:
+        payload = {
+            "checks": [check.model_dump(mode="json") for check in diagnosis.checks],
+            "exit_code": diagnosis.exit_code(strict=strict),
+        }
+        console.print_json(json.dumps(payload))
+        raise typer.Exit(diagnosis.exit_code(strict=strict))
+
     profile = asyncio.run(build_profile(model_path=model))
 
     console.print(f"[bold]harness-qwen[/bold] [dim]{__version__}[/dim]")
@@ -248,11 +298,17 @@ def doctor(
     _render_runtime(profile)
     _render_model(profile)
     _render_recommendations(profile)
+    _render_checks(diagnosis)
     _render_warnings(profile)
+
+    for warning in config.warnings:
+        console.print(f"  [yellow]•[/yellow] {warning}")
 
     if save:
         written = save_profile(profile, profile_path)
         console.print(f"\n[dim]profile written to {written}[/dim]")
+
+    raise typer.Exit(diagnosis.exit_code(strict=strict))
 
 
 @app.command("model-info")

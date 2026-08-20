@@ -352,13 +352,25 @@ def test_unmeasured_recommendations_are_left_alone(tmp_path: Path) -> None:
     assert resolved.origin_of("model.n_gpu_layers") is Origin.DEFAULT
 
 
+_REAL_PROFILE = Path(__file__).resolve().parents[1] / "config" / "hardware-profile.json"
+
+
+@pytest.mark.skipif(
+    not _REAL_PROFILE.exists(),
+    reason="hardware-profile.json is machine-specific and not versioned; "
+    "run `harness doctor` to generate one",
+)
 def test_the_real_repository_profile_resolves() -> None:
-    """The checked-in i7-7700/GTX-1060 profile must actually apply."""
-    repo = Path(__file__).resolve().parents[1]
-    resolved = resolve_config(profile_file=repo / "config" / "hardware-profile.json")
+    """A profile written by `doctor` on this machine must actually apply.
+
+    Skipped where none has been generated: the file describes one host and is
+    gitignored for that reason, so requiring it would make a fresh clone fail
+    a test about configuration.
+    """
+    resolved = resolve_config(profile_file=_REAL_PROFILE)
 
     assert resolved.hardware_profile is not None
-    assert resolved.config.model.threads == 4
+    assert resolved.config.model.threads is not None
 
 
 def test_a_field_whose_name_merely_contains_token_is_not_redacted() -> None:

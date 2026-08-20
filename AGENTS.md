@@ -20,6 +20,7 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/discovery/` | Hardware, runtime, and model probing → `hardware-profile.json` |
 | `src/harness/models/` | `ModelProvider` interface, `LlamaCppProvider`, `FakeProvider` |
 | `src/harness/config/` | Typed configuration: defaults < profile < file < env < CLI, with provenance |
+| `src/harness/diagnostics/` | Pre-flight readiness checks behind `harness doctor` |
 | `src/harness/runtime/` | `LlamaServerSupervisor`: start/attach/health/stop, owned vs attached |
 | `src/harness/context/` | `PromptAssembler`, `TokenBudget`, `CacheEconomics`, compressors |
 | `src/harness/agent/` | `AgentLoop`, roles, `Planner`, `TaskState`, `RetryPolicy` |
@@ -67,6 +68,7 @@ client.
 |---|---|---|
 | `agent` | 88% | 90.9% |
 | `config` | 95% | 97.5% |
+| `diagnostics` | 85% | 86.5% |
 | `context` | 80% | 83.2% |
 | `memory` | 75% | 77.9% |
 | `protocol` | 65% | 68.7% |

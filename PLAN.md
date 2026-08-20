@@ -92,7 +92,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
 - [ ] #13 `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
 - [ ] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
 - [ ] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
-- [ ] #16 `harness doctor` ausbauen (Sandbox/Port/Health/JSON-Exit, auf #7/#10/#12)
+- [x] #16 `harness doctor` ausbauen (Sandbox/Port/Health/JSON-Exit, auf #7/#10/#12)
 
 ### Phase C — v0.4 Retrieval & Benchmarks
 - [ ] #17 retrieval/ Retriever-Interface + SqliteFtsRetriever (FTS5-Fallback)

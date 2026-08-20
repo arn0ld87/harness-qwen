@@ -61,6 +61,7 @@ protocol = 65.0    # measured 68.7
 security = 50.0    # measured 53.5 — lowest of the five and the one to raise
                    # first: rules.py and shellsplit.py sit near 31% (#32).
 config = 95.0      # measured 97.5 — new, small and fully exercised
+diagnostics = 85.0 # measured 86.5 — readiness checks, tested against stubs
 runtime = 90.0     # measured 95.3 — process lifecycle, tested against a stub
 tools = 40.0       # measured 44.2, dragged down by filesystem.py and git.py
                    # having no unit tests yet — see the file floor below.
