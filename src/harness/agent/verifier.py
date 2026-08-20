@@ -19,17 +19,27 @@ rather than a loose bag of words.
 from __future__ import annotations
 
 import enum
+import hashlib
+import os
+import re
+import shlex
+import stat
+import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
-from harness.core import AnswerAction, ToolResult
+from harness.core import (
+    AnswerAction,
+    CommandEvidence,
+    ExecutedToolStep,
+    FileEvidence,
+    WorkspaceBaseline,
+)
 from harness.security import resolve_in_workspace
-from harness.tools.git import git_diff
+from harness.security.shellsplit import split_segments
 
 
 class Claim(enum.StrEnum):
@@ -38,6 +48,7 @@ class Claim(enum.StrEnum):
     TESTS_PASS = "tests_pass"
     BUILDS = "builds"
     LINT_CLEAN = "lint_clean"
+    TYPECHECK_CLEAN = "typecheck_clean"
 
 
 CLAIM_PHRASES: dict[Claim, tuple[str, ...]] = {
@@ -57,6 +68,8 @@ CLAIM_PHRASES: dict[Claim, tuple[str, ...]] = {
     ),
     Claim.LINT_CLEAN: (
         "lint is clean", "lint passes", "no lint errors",
+    ),
+    Claim.TYPECHECK_CLEAN: (
         "typecheck is clean", "typecheck passes", "type check passes",
     ),
 }
@@ -64,19 +77,7 @@ CLAIM_PHRASES: dict[Claim, tuple[str, ...]] = {
 check reads as a missing dict entry, not a buried conditional."""
 
 
-@dataclass(frozen=True, slots=True)
-class ExecutedStep:
-    """One tool call the run actually made — what :class:`Verifier` audits.
-
-    Built by the agent loop as it executes, never by the verifier: this
-    module does not re-run anything the model claims it ran, it reads what
-    already happened.
-    """
-
-    step_index: int
-    tool: str
-    arguments: dict[str, Any]
-    result: ToolResult
+ExecutedStep = ExecutedToolStep
 
 
 class VerificationOutcome(BaseModel):
@@ -110,8 +111,10 @@ class Verifier:
         answer: AnswerAction,
         *,
         history: Sequence[ExecutedStep],
+        run_id: str,
         workspace: Path,
         since: datetime,
+        baseline: WorkspaceBaseline | None = None,
     ) -> VerificationOutcome:
         claims = detect_claims(answer.content)
         if not claims:
@@ -128,7 +131,13 @@ class Verifier:
         all_ok = True
         for claim in claims:
             ok, note = self._check(
-                claim, answer.evidence, history=history, workspace=workspace, since=since,
+                claim,
+                answer.evidence,
+                history=history,
+                run_id=run_id,
+                workspace=workspace,
+                since=since,
+                baseline=baseline,
             )
             all_ok = all_ok and ok
             notes.append(f"{claim.value}: {note}")
@@ -138,39 +147,50 @@ class Verifier:
     def _check(
         self,
         claim: Claim,
-        evidence: Sequence[str],
+        evidence: Sequence[CommandEvidence | FileEvidence],
         *,
         history: Sequence[ExecutedStep],
+        run_id: str,
         workspace: Path,
         since: datetime,
+        baseline: WorkspaceBaseline | None,
     ) -> tuple[bool, str]:
         if claim is Claim.FILE_WRITTEN:
             return _check_file_written(evidence, workspace=workspace, since=since)
         if claim is Claim.PATCH_APPLIED:
-            return _check_patch_applied(evidence, workspace=workspace)
-        # tests_pass, builds and lint_clean all reduce to the same shape of
-        # evidence per the table: a captured exit code 0 from something the
-        # run actually ran, not a rerun triggered at verify time.
-        return _check_command_evidence(claim, evidence, history=history)
+            return _check_patch_applied(
+                evidence, workspace=workspace, baseline=baseline
+            )
+        return _check_command_evidence(
+            claim, evidence, history=history, run_id=run_id
+        )
 
 
 def _check_file_written(
-    evidence: Sequence[str], *, workspace: Path, since: datetime,
+    evidence: Sequence[CommandEvidence | FileEvidence],
+    *,
+    workspace: Path,
+    since: datetime,
 ) -> tuple[bool, str]:
     for item in evidence:
+        if not isinstance(item, FileEvidence) or item.kind != "file":
+            continue
         try:
             # Argument order is (path, workspace_root) — see
             # harness.security.workspace.resolve_in_workspace. Confinement is
             # still enforced; an evidence path outside the workspace is
             # skipped, not trusted.
-            resolved = resolve_in_workspace(item, workspace)
+            resolved = resolve_in_workspace(item.path, workspace)
         except Exception:
             continue
         if not resolved.exists():
             continue
         mtime = datetime.fromtimestamp(resolved.stat().st_mtime, tz=since.tzinfo)
         if mtime >= since:
-            note = f"{item} exists, modified {mtime.isoformat()} (run started {since.isoformat()})"
+            note = (
+                f"{item.path} exists, modified {mtime.isoformat()} "
+                f"(run started {since.isoformat()})"
+            )
             return True, note
     return False, (
         "no evidence path resolves to a file that exists with an mtime "
@@ -178,28 +198,183 @@ def _check_file_written(
     )
 
 
-def _check_patch_applied(evidence: Sequence[str], *, workspace: Path) -> tuple[bool, str]:
+def _check_patch_applied(
+    evidence: Sequence[CommandEvidence | FileEvidence],
+    *,
+    workspace: Path,
+    baseline: WorkspaceBaseline | None,
+) -> tuple[bool, str]:
+    if baseline is None:
+        return False, "run has no workspace baseline"
     for item in evidence:
-        result = git_diff(workspace, path=item)
-        if result.ok and not result.content.rstrip().endswith("(empty)"):
-            return True, f"{item}: `git diff` is non-empty"
-    return False, "no evidence path has a non-empty `git diff` against the workspace"
+        if not isinstance(item, FileEvidence) or item.kind != "patch":
+            continue
+        try:
+            resolved = resolve_in_workspace(item.path, workspace)
+            relative = resolved.relative_to(workspace.resolve()).as_posix()
+        except Exception:
+            continue
+        before = baseline.files.get(relative)
+        after = _fingerprint(resolved)
+        if before != after:
+            return True, f"{item.path}: content differs from run-start baseline"
+    return False, "no evidence path changed since the run-start baseline"
+
+
+def _git_output(workspace: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+    )
+    return result.stdout if result.returncode == 0 else b""
+
+
+def _fingerprint(path: Path) -> str | None:
+    try:
+        info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        if path.is_symlink():
+            payload = f"symlink\0{os.readlink(path)}".encode()
+        elif path.is_file():
+            payload = b"file\0" + path.read_bytes()
+        else:
+            return None
+    except OSError:
+        return None
+    digest = hashlib.sha256(payload).hexdigest()
+    return f"{mode:o}:{digest}"
+
+
+def capture_workspace_baseline(workspace: Path) -> WorkspaceBaseline:
+    """Capture Git metadata and content fingerprints before tool execution."""
+    root = workspace.resolve()
+    head = _git_output(root, "rev-parse", "HEAD").decode("utf-8", "replace").strip()
+    status = _git_output(root, "status", "--porcelain=v1", "-z")
+    diff = _git_output(root, "diff", "--binary", "HEAD") if head else b""
+    listed = _git_output(
+        root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
+    )
+    files: dict[str, str] = {}
+    for raw in listed.split(b"\0"):
+        if not raw:
+            continue
+        relative = raw.decode("utf-8", "surrogateescape")
+        try:
+            resolved = resolve_in_workspace(relative, root)
+        except Exception:
+            continue
+        fingerprint = _fingerprint(resolved)
+        if fingerprint is not None:
+            files[relative] = fingerprint
+    return WorkspaceBaseline(
+        head_sha=head or None,
+        status_sha256=hashlib.sha256(status).hexdigest(),
+        diff_sha256=hashlib.sha256(diff).hexdigest(),
+        files=files,
+        captured_at=datetime.now(UTC),
+    )
 
 
 def _check_command_evidence(
-    claim: Claim, evidence: Sequence[str], *, history: Sequence[ExecutedStep],
+    claim: Claim,
+    evidence: Sequence[CommandEvidence | FileEvidence],
+    *,
+    history: Sequence[ExecutedStep],
+    run_id: str,
 ) -> tuple[bool, str]:
-    ran = [step for step in history if step.tool == "run_command" and step.result.ok]
+    required_kind = {
+        Claim.TESTS_PASS: "test",
+        Claim.BUILDS: "build",
+        Claim.LINT_CLEAN: "lint",
+        Claim.TYPECHECK_CLEAN: "typecheck",
+    }[claim]
     for item in evidence:
-        needle = item.strip().lower()
-        if not needle:
+        if not isinstance(item, CommandEvidence) or item.kind != required_kind:
             continue
-        for step in ran:
-            command = str(step.arguments.get("command", "")).lower()
-            if needle in command or needle in step.result.content.lower():
-                ran_command = step.arguments.get("command")
-                return True, f"step {step.step_index} ran `{ran_command}` and exited 0"
+        step = next(
+            (
+                candidate
+                for candidate in history
+                if candidate.id == item.step_id and candidate.run_id == run_id
+            ),
+            None,
+        )
+        if step is None or step.tool != "run_command":
+            continue
+        if not step.result.ok or step.result.exit_code != 0:
+            continue
+        command = str(step.arguments.get("command", ""))
+        if classify_command_kind(command) != required_kind:
+            continue
+        return True, f"step {step.id} ran `{command}` as {required_kind} and exited 0"
     return False, (
-        f"no executed run_command step matching the cited evidence exited 0 "
-        f"({claim.value} needs a captured, successful run, not a claim about one)"
+        f"no cited step in run {run_id!r} is a successful {required_kind} command"
     )
+
+
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+_COMMAND_KINDS: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = (
+    (
+        "test",
+        (
+            ("pytest",),
+            ("uv", "run", "pytest"),
+            ("python", "-m", "pytest"),
+            ("python3", "-m", "pytest"),
+            ("pnpm", "test"),
+            ("npm", "test"),
+            ("cargo", "test"),
+        ),
+    ),
+    (
+        "lint",
+        (("ruff", "check"), ("uv", "run", "ruff", "check")),
+    ),
+    (
+        "typecheck",
+        (
+            ("mypy",),
+            ("uv", "run", "mypy"),
+            ("pyright",),
+            ("pnpm", "exec", "tsc"),
+            ("tsc",),
+        ),
+    ),
+    (
+        "build",
+        (
+            ("uv", "build"),
+            ("python", "-m", "build"),
+            ("python3", "-m", "build"),
+            ("pnpm", "build"),
+            ("pnpm", "run", "build"),
+            ("npm", "run", "build"),
+            ("cargo", "build"),
+            ("make", "build"),
+        ),
+    ),
+)
+
+
+def classify_command_kind(command: str) -> str | None:
+    """Classify one non-compound command for verification purposes."""
+    segments = [segment for segment in split_segments(command) if segment.strip()]
+    if len(segments) != 1:
+        return None
+    try:
+        tokens = shlex.split(segments[0])
+    except ValueError:
+        return None
+    while tokens and _ENV_ASSIGNMENT.match(tokens[0]):
+        tokens.pop(0)
+    if tokens and tokens[0] == "env":
+        tokens.pop(0)
+        while tokens and (_ENV_ASSIGNMENT.match(tokens[0]) or tokens[0].startswith("-")):
+            tokens.pop(0)
+    for kind, prefixes in _COMMAND_KINDS:
+        if any(tuple(tokens[: len(prefix)]) == prefix for prefix in prefixes):
+            return kind
+    return None

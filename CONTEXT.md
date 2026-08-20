@@ -87,10 +87,10 @@ else changes at least once per step and belongs in the append zone.
 ## 3. Token budget
 
 **The absolute numbers here are not yet measured.** The context-size sweet
-spot is answered only by the flag sweep (`src/harness/benchmark/`, per
-DISCOVERY.md §5.2 and VISION.md), which has not run against a sized-context
-matrix. What follows is the *shape* of the budget plus one placeholder,
-explicitly marked provisional.
+spot is answered only by the planned flag sweep (the not-yet-implemented
+`src/harness/benchmark/`, per DISCOVERY.md §5.2 and VISION.md), which has not
+run against a sized-context matrix. What follows is the *shape* of the budget
+plus one placeholder, explicitly marked provisional.
 
 ```
 C = P + A + G
@@ -240,12 +240,10 @@ addressable by id.
 
 ## 7. Retrieval
 
-Retrieval sits behind the `Retriever` interface (`retrieval/`, per
-ARCHITECTURE.md). `ContextMode` is the default, reusing the FTS5 index this
-machine already maintains; `SqliteFtsRetriever` is the built-in fallback for a
-machine without `ctx`. No vector database is part of either path — embeddings
-are added only if a benchmark shows keyword retrieval insufficient, per the
-Memory section of ARCHITECTURE.md.
+Retrieval is planned behind a future `Retriever` interface (`retrieval/`, per
+ARCHITECTURE.md); no adapter is implemented yet. SQLite persistent facts with
+optional FTS5 exist today, but they are not exposed as a retrieval tool. No
+vector database is present.
 
 Retrieval is a **tool**, not a distinct protocol action — `request_context` is
 deliberately absent from the action vocabulary. It is triggered the same way
@@ -267,9 +265,9 @@ a prefix rewrite.
   repository *map*, not its contents — a 4-core, no-AVX-512 CPU cannot absorb
   the pp-rate cost of a full source tree, and it would make the prefix itself
   unstable on every file change.
-- **A vector database without demonstrated need.** SQLite + FTS5 is the
-  default and the fallback (§7); embeddings are added only when a benchmark
-  shows keyword retrieval failing, not because the project involves an LLM.
+- **A vector database without demonstrated need.** Persistent facts use
+  SQLite with optional FTS5. Retrieval is not implemented (§7); embeddings
+  are added only if a future benchmark demonstrates a need.
 - **Sending the full conversation history verbatim.** Working memory is
   scoped to one run and discarded on completion except its summary
   (ARCHITECTURE.md, Memory). An ever-growing raw transcript would cross the

@@ -21,7 +21,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from harness.core import PlanStep, RunResult, StepStatus, TaskState
+from harness.core import PlanStep, RunResult, RunRuntimeState, StepStatus, TaskState
 from harness.memory.facts import Fact, FactStore, fts5_available
 from harness.memory.migrations import (
     SCHEMA_VERSION,
@@ -95,7 +95,11 @@ class MemoryStore:
     # -- runs --------------------------------------------------------------
 
     def _upsert_run(self, state: TaskState, *, overwrite_goal: bool) -> None:
-        goal_clause = "goal = excluded.goal, workspace = excluded.workspace," if overwrite_goal else ""
+        goal_clause = (
+            "goal = excluded.goal, workspace = excluded.workspace,"
+            if overwrite_goal
+            else ""
+        )
         self._conn.execute(
             f"""
             INSERT INTO runs (run_id, goal, workspace, created_at, updated_at)
@@ -209,6 +213,37 @@ class MemoryStore:
         ).fetchall()
         return [r["run_id"] for r in rows]
 
+    def save_runtime_state(self, state: RunRuntimeState) -> None:
+        with self._lock, self._conn:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO runtime_state (run_id, runtime_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(run_id) DO UPDATE SET
+                        runtime_json = excluded.runtime_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (state.run_id, state.model_dump_json(), _now()),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise UnknownRunError(
+                    f"cannot save runtime state for unknown run {state.run_id!r}"
+                ) from exc
+
+    def load_runtime_state(self, run_id: str) -> RunRuntimeState | None:
+        row = self._conn.execute(
+            "SELECT runtime_json FROM runtime_state WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return RunRuntimeState.model_validate_json(row["runtime_json"])
+        except ValidationError as exc:
+            raise StoreError(
+                f"stored runtime state for run {run_id!r} is invalid: {exc}"
+            ) from exc
+
     # -- steps -------------------------------------------------------------
 
     def append_step(
@@ -273,6 +308,67 @@ class MemoryStore:
             )
             if cur.rowcount == 0:
                 raise StoreError(f"no step with id {step_id}")
+
+    def save_tool_checkpoint(
+        self,
+        *,
+        step_id: int,
+        status: StepStatus,
+        task_state: TaskState,
+        runtime_state: RunRuntimeState,
+        exit_code: int | None = None,
+        error_kind: str | None = None,
+        duration_ms: float | None = None,
+    ) -> None:
+        """Commit tool completion and both resume states atomically."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """
+                UPDATE steps SET status = ?, finished_at = ?, exit_code = ?,
+                                 error_kind = ?, duration_ms = ?
+                WHERE id = ? AND run_id = ?
+                """,
+                (
+                    str(status),
+                    _now(),
+                    exit_code,
+                    error_kind,
+                    duration_ms,
+                    step_id,
+                    task_state.run_id,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise StoreError(
+                    f"no step {step_id} for run {task_state.run_id!r}"
+                )
+            self._upsert_run(task_state, overwrite_goal=False)
+            self._conn.execute(
+                """
+                INSERT INTO task_state (run_id, step_index, state_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    step_index = excluded.step_index,
+                    state_json = excluded.state_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    task_state.run_id,
+                    task_state.step_index,
+                    task_state.model_dump_json(),
+                    task_state.updated_at.isoformat(),
+                ),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO runtime_state (run_id, runtime_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    runtime_json = excluded.runtime_json,
+                    updated_at = excluded.updated_at
+                """,
+                (runtime_state.run_id, runtime_state.model_dump_json(), _now()),
+            )
 
     def get_steps(self, run_id: str) -> list[StepRecord]:
         rows = self._conn.execute(

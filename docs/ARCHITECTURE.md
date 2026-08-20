@@ -9,16 +9,16 @@ choice below traces back to a number in [DISCOVERY.md](DISCOVERY.md).
 src/harness/
 ├── discovery/     hardware, runtime and model probing -> hardware-profile.json
 ├── models/        ModelProvider interface + LlamaCppProvider + FakeProvider
-├── runtime/       llama-server supervisor: launch, health, flag application
+├── runtime/       planned: llama-server supervisor (not implemented)
 ├── context/       PromptAssembler, TokenBudget, CacheEconomics, compressors
 ├── agent/         AgentLoop, roles, Planner, TaskState, RetryPolicy
 ├── protocol/      ActionCodec (native tool_calls | constrained JSON), schemas
 ├── tools/         registry, typed tools, ToolResult compression
 ├── memory/        SQLite: task state, run journal, persistent facts
-├── retrieval/     Retriever interface: ContextMode (default) | SqliteFts
+├── retrieval/     planned: Retriever interface (not implemented)
 ├── security/      command classification and approval gate
 ├── telemetry/     structured run log, no CoT, no secrets
-├── benchmark/     capability probes, flag sweep, task benchmarks
+├── benchmark/     planned: capability and task benchmarks (not implemented)
 └── cli.py         Typer entry point
 ```
 
@@ -136,7 +136,7 @@ The action vocabulary stays minimal — YAGNI applies. Shipping in v1:
 
 ```json
 {"action": "tool",   "tool": "read_file", "arguments": {...}, "reason": "..."}
-{"action": "answer", "content": "...", "evidence": ["..."]}
+{"action": "answer", "content": "...", "evidence": [{"kind": "test", "step_id": 12}]}
 ```
 
 `plan` is not a model action; planning is a role that emits a `TaskState`
@@ -157,10 +157,10 @@ matching evidence exists:
 | Claim | Required evidence |
 |---|---|
 | file written | file exists, mtime advanced, content hash differs |
-| patch applied | non-empty `git diff` touching the named path |
-| tests pass | test runner exit code 0, captured output |
-| builds | build command exit code 0 |
-| lint / typecheck clean | tool exit code 0 |
+| patch applied | cited path differs from its persisted run-start fingerprint |
+| tests pass | cited current-run step is a classified test command with exit code 0 |
+| builds | cited current-run step is a classified build command with exit code 0 |
+| lint / typecheck clean | cited current-run step has the matching command class and exit code 0 |
 
 `Verifier` runs the checks the task type demands. Unverified claims are
 downgraded to *reported but unverified* in the run summary, never silently
@@ -194,28 +194,32 @@ Three classes, resolved by pattern before execution:
   `reboot`, fork bombs, `DROP DATABASE`. Not confirmable; refused.
 
 Deny wins over allow. Unclassified commands land in **confirm**, not allow —
-an unknown command is not a safe command. All file tools are confined to the
-workspace root with symlink resolution before the check.
+an unknown command is not a safe command. File tools resolve symlinks before
+enforcing workspace containment. Shell operands are checked against the same
+boundary; on Linux, allowed commands additionally run in a bubblewrap
+filesystem sandbox with the workspace writable and HOME absent. Network tools
+remain confirmation-gated; network namespace creation is environment-dependent
+and is not claimed as an unconditional sandbox property.
 
 The model name containing *Uncensored* changes nothing here. The security
 boundary was never the model.
 
 ## Runtime supervision
 
-The harness owns the `llama-server` process, so measured flags actually apply.
+Runtime supervision is planned and not implemented. Today the provider attaches
+to an already-running `llama-server`; it does not launch or reconfigure it.
 
-It handles the environment quirk discovered on this machine: LM Studio's CUDA
+The planned supervisor must handle the environment quirk discovered on this machine: LM Studio's CUDA
 backends link against CUDA 11.8 while the host driver provides 13.0, so both the
 backend directory and `vendor/linux-llama-cuda-vendor-v1` must be on
 `LD_LIBRARY_PATH` or the binary will not start.
 
-Supervision covers: launch with a profile, readiness polling (the server answers
+The planned scope covers: launch with a profile, readiness polling (the server answers
 `503 Loading model` before it is ready), health checks, graceful shutdown before
 a reconfiguration, and refusal to start a profile whose projected memory
 footprint exceeds available RAM minus reserve.
 
-Attaching to an already-running server stays supported; in that mode the harness
-reports the profile mismatch rather than restarting anything unasked.
+Attaching to an already-running server is the only implemented mode today.
 
 ## Provider interface
 
@@ -243,11 +247,9 @@ SQLite, two levels, no vector database.
 - **Persistent memory** — architecture notes, conventions, decisions, known
   issues. Explicitly written, never harvested automatically from transcripts.
 
-Retrieval defaults to `context-mode`, which already maintains an FTS5 index on
-this machine, behind a `Retriever` interface. `SqliteFtsRetriever` is the
-built-in fallback so the harness runs where `ctx` is absent. Embeddings are
-added only if a benchmark demonstrates that keyword retrieval is insufficient —
-not because the project involves AI.
+Retrieval adapters are planned and not implemented. Persistent facts already
+use SQLite with optional FTS5; a future retriever may build on that only after
+benchmarks justify it. No vector database is present.
 
 ## Telemetry
 

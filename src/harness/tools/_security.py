@@ -26,13 +26,14 @@ PathResolver = Callable[[Path, str], Path]
 """Maps ``(workspace, path)`` to an absolute path proven to be inside it."""
 
 
-def default_classifier(command: str) -> Risk:
-    """Classify ``command`` via ``harness.security.classifier.classify``."""
+def default_classifier(command: str, workspace: Path | None = None) -> Risk:
+    """Classify ``command`` with the workspace-aware security boundary."""
     try:
-        from harness.security.classifier import classify
+        from harness.security.classifier import classify_command
     except ImportError:
         return Risk.CONFIRM
-    return _coerce_risk(classify(command))
+    risk, _ = classify_command(command, workspace=workspace)
+    return _coerce_risk(risk)
 
 
 def default_resolver(workspace: Path, path: str) -> Path:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -213,13 +214,18 @@ def _render_warnings(p: HardwareProfile) -> None:
 
 @app.command()
 def doctor(
-    model: Path | None = typer.Option(
-        None, "--model", "-m", help="Path to a GGUF file. Default: taken from the running server."
-    ),
-    save: bool = typer.Option(True, "--save/--no-save", help="Write config/hardware-profile.json."),
-    profile_path: Path = typer.Option(
-        DEFAULT_PROFILE_PATH, "--profile-path", help="Where to write the profile."
-    ),
+    model: Annotated[
+        Path | None,
+        typer.Option("--model", "-m", help="GGUF path; defaults to the running server."),
+    ] = None,
+    save: Annotated[
+        bool,
+        typer.Option("--save/--no-save", help="Write config/hardware-profile.json."),
+    ] = True,
+    profile_path: Annotated[
+        Path,
+        typer.Option("--profile-path", help="Where to write the profile."),
+    ] = DEFAULT_PROFILE_PATH,
 ) -> None:
     """Probe hardware, runtime and model, then report what is known and what is not."""
     profile = asyncio.run(build_profile(model_path=model))
@@ -238,7 +244,7 @@ def doctor(
 
 @app.command("model-info")
 def model_info(
-    path: Path = typer.Argument(..., help="Path to a GGUF file."),
+    path: Annotated[Path, typer.Argument(help="Path to a GGUF file.")],
 ) -> None:
     """Print metadata read from a GGUF file, including the hybrid layer split."""
     from harness.discovery import read_gguf_metadata

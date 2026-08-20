@@ -6,11 +6,10 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
 
 from harness.core import ToolError, ToolResult
+from harness.tools._security import default_resolver
 from harness.tools.compression import compress_output
-from harness.tools._security import default_resolver, default_classifier
 
 
 def read_file(workspace: Path, path: str, offset: int = 0, limit: int | None = None) -> ToolResult:
@@ -30,15 +29,15 @@ def read_file(workspace: Path, path: str, offset: int = 0, limit: int | None = N
     try:
         raw = resolved.read_bytes()
     except PermissionError:
-        return _err("permission_denied", f"Cannot read file: permission denied")
+        return _err("permission_denied", "Cannot read file: permission denied")
     except OSError as exc:
         return _err("execution_failed", f"Cannot read file: {exc}")
     if b"\x00" in raw:
-        return _err("execution_failed", f"File is binary (contains NUL bytes)")
+        return _err("execution_failed", "File is binary (contains NUL bytes)")
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return _err("execution_failed", f"File is not UTF-8 text")
+        return _err("execution_failed", "File is not UTF-8 text")
     lines = text.splitlines()
     start, end = min(offset, len(lines)), len(lines)
     if limit is not None:
@@ -75,7 +74,11 @@ def write_file(
         return ToolResult(
             tool="write_file",
             ok=False,
-            error_kind="permission_denied" if isinstance(exc, PermissionError) else "execution_failed",
+            error_kind=(
+                "permission_denied"
+                if isinstance(exc, PermissionError)
+                else "execution_failed"
+            ),
             content=f"Cannot write file: {exc}",
             duration_ms=(time.perf_counter() - started) * 1000.0,
         )
@@ -248,7 +251,13 @@ def _search_with_ripgrep(rg_path: Path, base: Path, pattern: str, regex: bool) -
         if not regex:
             args.append("-F")
         args.extend([pattern, str(base)])
-        result = subprocess.run(args, capture_output=True, timeout=10, text=True, cwd=str(base.parent))
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            timeout=10,
+            text=True,
+            cwd=str(base.parent),
+        )
         return result.stdout or "(no matches)"
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"ripgrep error: {exc}"

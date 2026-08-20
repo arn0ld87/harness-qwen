@@ -164,8 +164,9 @@ def validate_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> lis
     if schema.get("additionalProperties") is False:
         for key in arguments:
             if key not in properties:
+                allowed = ", ".join(sorted(properties)) or "none"
                 errors.append(
-                    f"unexpected argument {key!r} (allowed: {', '.join(sorted(properties)) or 'none'})"
+                    f"unexpected argument {key!r} (allowed: {allowed})"
                 )
 
     for key, value in arguments.items():

@@ -24,7 +24,7 @@ ACTION_KINDS: tuple[str, ...] = ("tool", "answer")
 
 _REASON_DESCRIPTION = "Why this tool call is the next step."
 _CONTENT_DESCRIPTION = "The final answer to the task."
-_EVIDENCE_DESCRIPTION = "References a verifier can check: paths, commands, exit codes."
+_EVIDENCE_DESCRIPTION = "Typed references to harness-recorded steps or workspace paths."
 
 # Model class names leak into Pydantic error locations through the discriminated
 # union; they are noise to the model reading the feedback.
@@ -75,7 +75,30 @@ def _answer_branch() -> dict[str, Any]:
             "content": {"type": "string", "description": _CONTENT_DESCRIPTION},
             "evidence": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": {
+                                    "enum": ["test", "lint", "typecheck", "build"]
+                                },
+                                "step_id": {"type": "integer", "minimum": 1},
+                            },
+                            "required": ["kind", "step_id"],
+                            "additionalProperties": False,
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"enum": ["file", "patch"]},
+                                "path": {"type": "string", "minLength": 1},
+                            },
+                            "required": ["kind", "path"],
+                            "additionalProperties": False,
+                        },
+                    ]
+                },
                 "description": _EVIDENCE_DESCRIPTION,
             },
         },

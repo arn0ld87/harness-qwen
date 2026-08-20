@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
-from harness.core import Risk, ToolError, ToolResult
-from harness.tools.compression import compress_command_output, detect_kind
+from harness.core import Risk, ToolResult
 from harness.tools._security import default_classifier
-
+from harness.tools.compression import compress_command_output, detect_kind
 
 ConfirmCallback = Callable[[str, str], bool]
 """Maps (command, risk_reason) to approval: True to run, False to deny."""
@@ -32,9 +32,10 @@ def run_command(
     executes immediately.
     """
     started = time.perf_counter()
+    workspace = workspace.resolve()
     cwd = str(workspace)
 
-    risk = default_classifier(command)
+    risk = default_classifier(command, workspace)
 
     if risk is Risk.DENY:
         return ToolResult(
@@ -51,7 +52,10 @@ def run_command(
                 tool="run_command",
                 ok=False,
                 error_kind="denied",
-                content=f"Command requires confirmation but no approval mechanism is available: {command}",
+                content=(
+                    "Command requires confirmation but no approval mechanism "
+                    f"is available: {command}"
+                ),
                 duration_ms=(time.perf_counter() - started) * 1000.0,
             )
         approved = confirm_callback(command, "This command requires approval")
@@ -65,13 +69,15 @@ def run_command(
             )
 
     try:
+        sandboxed = _sandbox_argv(workspace, command)
         proc = subprocess.Popen(
-            command,
-            shell=True,
+            sandboxed,
+            shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             cwd=cwd,
+            env={"HOME": "/tmp/home", "LANG": "C.UTF-8", "PATH": _sandbox_path(workspace)},
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )
     except Exception as exc:
@@ -128,3 +134,95 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except (OSError, ProcessLookupError):
         pass
+
+
+def _sandbox_path(workspace: Path) -> str:
+    entries = [workspace / ".venv" / "bin", Path("/usr/bin"), Path("/bin")]
+    uv = shutil.which("uv")
+    if uv:
+        entries.insert(1, Path(uv).parent)
+    return ":".join(str(entry) for entry in entries)
+
+
+def _sandbox_argv(workspace: Path, command: str) -> list[str]:
+    """Wrap a command in bubblewrap when available, otherwise rely on the gate."""
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        return ["/bin/sh", "-c", command]
+
+    argv = [
+        bwrap,
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/bin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib",
+        "/lib64",
+    ]
+    for source in (Path("/etc/ld.so.cache"), Path("/etc/localtime"), Path("/etc/ssl")):
+        if source.exists():
+            _append_parent_dirs(argv, source.parent)
+            argv.extend(("--ro-bind", str(source), str(source)))
+
+    toolchain_paths = [Path(sys.base_prefix)]
+    uv = shutil.which("uv")
+    if uv:
+        toolchain_paths.append(Path(uv))
+    for source in toolchain_paths:
+        resolved = source.resolve()
+        if resolved.is_relative_to("/usr") or resolved.is_relative_to(workspace):
+            continue
+        _append_parent_dirs(argv, resolved.parent)
+        argv.extend(("--ro-bind", str(resolved), str(resolved)))
+
+    _append_parent_dirs(argv, workspace.parent)
+    argv.extend(
+        (
+            "--bind",
+            str(workspace),
+            str(workspace),
+            "--chdir",
+            str(workspace),
+            "--clearenv",
+            "--setenv",
+            "HOME",
+            "/tmp/home",
+            "--setenv",
+            "LANG",
+            "C.UTF-8",
+            "--setenv",
+            "PATH",
+            _sandbox_path(workspace),
+            "/bin/sh",
+            "-c",
+            command,
+        )
+    )
+    return argv
+
+
+def _append_parent_dirs(argv: list[str], path: Path) -> None:
+    parents = list(reversed(path.parents[:-1])) + [path]
+    for parent in parents:
+        if parent != Path("/"):
+            argv.extend(("--dir", str(parent)))

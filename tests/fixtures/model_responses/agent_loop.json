@@ -1,0 +1,23 @@
+{
+  "coding_run": [
+    {"action": "tool", "tool": "read_file", "arguments": {"path": "main.py"}, "reason": "inspect"},
+    {"action": "tool", "tool": "write_file", "arguments": {"path": "main.py", "content": "value = 2\n"}, "reason": "fix"},
+    {"action": "tool", "tool": "run_command", "arguments": {"command": "pytest"}, "reason": "verify"},
+    {"action": "answer", "content": "Fixed the file. All tests pass", "evidence": [{"kind": "patch", "path": "main.py"}, {"kind": "test", "step_id": 6}]}
+  ],
+  "false_success": [
+    {"action": "answer", "content": "All tests pass", "evidence": []}
+  ],
+  "parse_retry": [
+    "not json",
+    {"action": "answer", "content": "No change required"}
+  ],
+  "no_progress": [
+    {"action": "tool", "tool": "read_file", "arguments": {"path": "main.py"}, "reason": "inspect"},
+    {"action": "tool", "tool": "read_file", "arguments": {"path": "main.py"}, "reason": "inspect"},
+    {"action": "tool", "tool": "read_file", "arguments": {"path": "main.py"}, "reason": "inspect"}
+  ],
+  "budget": [
+    {"action": "tool", "tool": "read_file", "arguments": {"path": "main.py"}, "reason": "inspect"}
+  ]
+}

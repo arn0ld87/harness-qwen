@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 
 from harness.core import ToolResult
-from harness.tools.compression import compress_command_output, detect_kind
 from harness.tools._security import default_resolver
+from harness.tools.compression import compress_command_output, detect_kind
 
 
 def git_status(workspace: Path) -> ToolResult:

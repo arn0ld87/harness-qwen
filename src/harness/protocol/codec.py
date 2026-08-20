@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from typing import Any, Protocol, TypeAlias, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from harness.core import Action, ModelResponse, ParseError, ToolSpec
 
-PromptFragment: TypeAlias = str
+type PromptFragment = str
 """Prompt text a codec contributes. It lands in the stable prefix, so identical
 input must render byte-identical output."""
 

@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import re
 
-
-_HEX_ONLY = re.compile(r'[0-9a-fA-F]+')
+_HEX_ONLY = re.compile(r"[0-9a-fA-F]+")
 
 
 def redact(text: str) -> str:
@@ -35,7 +34,7 @@ def redact(text: str) -> str:
         result
     )
 
-    # GitHub tokens: gh[pousr]_... (gh[p|o|u|s|r] followed by underscore and 20+ alphanumeric/underscore)
+    # GitHub tokens: gh[pousr]_... followed by 20+ alphanumeric/underscore characters.
     result = re.sub(
         r'\bgh[pousr]_[A-Za-z0-9_]{20,}\b',
         '[redacted:github_token]',

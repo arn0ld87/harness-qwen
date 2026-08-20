@@ -45,17 +45,26 @@ later decision, and are worked out in full in [VISION.md](VISION.md):
 Version 1 is in development. Nothing here should be read as finished
 software yet.
 
-Done:
+Implemented:
 - Hardware, runtime, and model discovery completed and documented
   (`docs/DISCOVERY.md`), with every figure traced back to a command run on
   the target machine.
 - Architecture defined (`docs/ARCHITECTURE.md`): module layout, the prefix
   contract, cache economics, agent loop, action protocol, verification
   rules, and the security boundary.
+- Model providers (`LlamaCppProvider`, `FakeProvider`), structured action
+  codecs, prompt assembly, cache economics and compression strategies.
+- Agent loop with bounded retries, sequential roles, typed evidence,
+  workspace-baselined patch verification and SQLite resume state.
+- Typed tools, output compression, deterministic command classification,
+  bubblewrap filesystem isolation where available, and redacted telemetry.
+- CI tests run without a model or GPU.
 
-Not done:
-- Implementation has not started; `src/harness/` currently exists only as
-  an empty module skeleton.
+Planned, not implemented:
+- llama-server process supervision (`runtime/`). The current provider attaches
+  to an already running endpoint; it does not launch or restart the server.
+- Retrieval adapters (`retrieval/`) and benchmark runners (`benchmark/`).
+- The task-running, chat, benchmark, config and memory-inspection CLI commands.
 - No benchmarks have been run yet. The claim that this harness beats a
   plain prompt loop on real tasks is the point of the project, not an
   assumption — see the "What 'done' means" section of `VISION.md`.
@@ -84,23 +93,21 @@ cd harness-qwen
 uv sync
 ```
 
-Point the harness at a running OpenAI-compatible endpoint (e.g.
-`http://127.0.0.1:18080`) once the CLI is available — see Usage below.
+The provider defaults to the running OpenAI-compatible endpoint
+`http://127.0.0.1:18080`.
 
 ## Usage
 
-The following CLI surface is planned. **Not all of these commands are
-implemented yet.**
+Implemented CLI commands:
 
 ```
 harness doctor              # check hardware, runtime, and model against discovery
-harness run "..."           # run a single agent task to completion
-harness chat                # interactive session
-harness benchmark           # run the capability / flag-sweep / task benchmarks
-harness model-info          # report loaded model metadata and capabilities
-harness config show         # print the resolved runtime configuration
-harness memory inspect      # inspect working and persistent memory (SQLite)
+harness model-info PATH     # report metadata from a GGUF file
+harness version             # print the package version
 ```
+
+`run`, `chat`, `benchmark`, `config` and `memory inspect` are planned and do
+not exist yet.
 
 ## Documentation
 
@@ -109,9 +116,9 @@ harness memory inspect      # inspect working and persistent memory (SQLite)
 | [VISION.md](VISION.md) | Why this project exists, what it deliberately is not, and the priority order used to resolve design trade-offs. |
 | [docs/DISCOVERY.md](docs/DISCOVERY.md) | Every measured hardware, runtime, and model fact this project is built on, with the command used to obtain it. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module layout, the prefix contract, cache economics, agent loop, action protocol, verification, and security boundary — each traced back to a DISCOVERY.md measurement. |
-| CONTEXT.md | Planned: how context compression is budgeted against the reprocessing cost instead of triggered on a timer. Not yet written. |
-| API.md | Planned: reference for the provider interface and the OpenAI-compatible endpoint the harness talks to. Not yet written. |
-| AGENTS.md | Planned: reference for the planner / coder / tester / reviewer roles that share one model, one slot, and one warm cache. Not yet written. |
+| [CONTEXT.md](CONTEXT.md) | Context zones, token budgets, compression economics and retrieval design. |
+| [API.md](API.md) | Public types and provider, protocol, context, tool and security interfaces. |
+| [AGENTS.md](AGENTS.md) | Repository rules, module responsibilities and agent-loop invariants. |
 
 ## Design principles
 

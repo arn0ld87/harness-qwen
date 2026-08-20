@@ -345,6 +345,7 @@ class StrategyOutcome(BaseModel):
     freed_tokens: int
     reprocess_tokens: int
     applied: bool
+    resolves_overflow: bool
     reason: str
     decision: CompressionDecision | None = None
 
@@ -379,6 +380,7 @@ def escalate(
             outcomes.append(StrategyOutcome(
                 strategy=strategy.name, freed_tokens=freed, reprocess_tokens=reprocess,
                 applied=applied,
+                resolves_overflow=applied and freed > 0,
                 reason="ungated: pure tail append" if applied else "nothing to do",
             ))
             continue
@@ -386,7 +388,7 @@ def escalate(
         if freed <= 0:
             outcomes.append(StrategyOutcome(
                 strategy=strategy.name, freed_tokens=freed, reprocess_tokens=reprocess,
-                applied=False, reason="nothing to do",
+                applied=False, resolves_overflow=False, reason="nothing to do",
             ))
             continue
 
@@ -401,7 +403,10 @@ def escalate(
             strategy.apply(state)
         outcomes.append(StrategyOutcome(
             strategy=strategy.name, freed_tokens=freed, reprocess_tokens=reprocess,
-            applied=decision.compress, reason=decision.rationale, decision=decision,
+            applied=decision.compress,
+            resolves_overflow=decision.compress and freed > 0,
+            reason=decision.rationale,
+            decision=decision,
         ))
         if decision.compress:
             break

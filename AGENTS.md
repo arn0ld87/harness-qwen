@@ -11,7 +11,6 @@ uv sync                          # Install dependencies
 uv run pytest                    # Run tests (excludes local_llm by default)
 uv run pytest -m local_llm       # Run tests requiring the 35B model
 uv run harness doctor            # Probe hardware and runtime
-uv run harness benchmark         # Run capability benchmarks
 ```
 
 ## Module map
@@ -20,16 +19,16 @@ uv run harness benchmark         # Run capability benchmarks
 |--------|---|
 | `src/harness/discovery/` | Hardware, runtime, and model probing → `hardware-profile.json` |
 | `src/harness/models/` | `ModelProvider` interface, `LlamaCppProvider`, `FakeProvider` |
-| `src/harness/runtime/` | llama-server supervisor: launch, health, flag application |
+| `src/harness/runtime/` | Planned; not implemented |
 | `src/harness/context/` | `PromptAssembler`, `TokenBudget`, `CacheEconomics`, compressors |
 | `src/harness/agent/` | `AgentLoop`, roles, `Planner`, `TaskState`, `RetryPolicy` |
 | `src/harness/protocol/` | `ActionCodec` (native tool_calls or constrained JSON), schemas |
 | `src/harness/tools/` | Registry, typed tools, `ToolResult` compression |
 | `src/harness/memory/` | SQLite: task state, run journal, persistent facts |
-| `src/harness/retrieval/` | `Retriever` interface: `ContextMode` (default) or `SqliteFts` |
+| `src/harness/retrieval/` | Planned; not implemented |
 | `src/harness/security/` | Command classification (allow/confirm/deny) and approval gate |
 | `src/harness/telemetry/` | Structured run log (no CoT, no secrets) |
-| `src/harness/benchmark/` | Capability probes, flag sweep, task benchmarks |
+| `src/harness/benchmark/` | Planned; not implemented |
 | `src/harness/cli.py` | Typer entry point |
 
 ## Code style
@@ -57,7 +56,7 @@ uv run harness benchmark         # Run capability benchmarks
 
 3. **Security is deterministic code, not a model judgment.** Commands are classified by pattern into allow/confirm/deny *before* execution. Unclassified commands land in "confirm", not "allow". The model's willingness to run something is irrelevant to the boundary.
 
-4. **Verification is mandatory.** Claims like "file written", "tests pass", "builds" are rejected unless the task produces matching evidence: file mtime advanced, `git diff` non-empty for patches, test runner exit code 0, build command exit code 0. `Verifier` downgrades unverified claims to "reported but unverified" in the summary.
+4. **Verification is mandatory.** Claims like "file written", "tests pass", "builds" are rejected unless the task produces matching typed evidence: file state changed since the run baseline, or a cited current-run command step has the matching class and exit code 0. `Verifier` downgrades unverified claims to "reported but unverified" in the summary.
 
 5. **`parallel_model_requests` stays 1.** Measured: a second concurrent slot halves throughput on this hardware. Parallelism means queueing with extra steps. Sub-agents run sequentially as roles (planner, coder, tester, reviewer) sharing one model and one warm cache.
 

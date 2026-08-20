@@ -1,5 +1,6 @@
 """Tool execution: registry, security policy, and output compression."""
 
+from harness.tools._security import default_classifier, default_resolver
 from harness.tools.compression import (
     CompressedOutput,
     compress_command_output,
@@ -7,7 +8,6 @@ from harness.tools.compression import (
     detect_kind,
 )
 from harness.tools.registry import RegisteredTool, ToolRegistry, validate_arguments
-from harness.tools._security import default_classifier, default_resolver
 
 __all__ = [
     "CompressedOutput",

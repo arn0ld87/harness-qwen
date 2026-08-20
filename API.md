@@ -115,14 +115,22 @@ class ToolAction(BaseModel):
 class AnswerAction(BaseModel):
     action: Literal["answer"]
     content: str
-    evidence: list[str]
+    evidence: list[CommandEvidence | FileEvidence]
+
+class CommandEvidence(BaseModel):
+    kind: Literal["test", "lint", "typecheck", "build"]
+    step_id: int
+
+class FileEvidence(BaseModel):
+    kind: Literal["file", "patch"]
+    path: str
 
 Action = ToolAction | AnswerAction
 ```
 
 Two actions, deliberately. `plan` is not a model action — planning is a role
 that updates `TaskState` through the tool channel. `delegate` is absent because
-roles run sequentially. `request_context` is absent because retrieval is a tool.
+roles run sequentially. `request_context` is absent; retrieval is planned as a tool.
 Actions are added when a benchmark shows their absence costs something.
 
 ```python
@@ -146,7 +154,6 @@ class Role(StrEnum):
 class Budget(BaseModel):
     max_steps: int
     wall_clock_s: float
-    max_prompt_tokens: int
     max_output_tokens: int
     max_tool_calls: int
     max_retries: int
@@ -165,6 +172,9 @@ class TaskState(BaseModel):    # persisted before each step; resumable
     open_problems: list[str]
     step_index: int
 ```
+
+Prompt limits belong exclusively to `TokenBudget`; `Budget` owns run-level
+step, wall-clock, output, tool and retry bounds.
 
 ---
 

@@ -13,13 +13,25 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Upgrades from the keyed version to the next one. Empty while SCHEMA_VERSION
 # is 1; the mechanism ships now so that version 2 becomes a data migration
 # rather than a data loss.
-MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {}
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE runtime_state (
+            run_id       TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+            runtime_json TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )
+        """
+    )
+
+
+MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {1: _migrate_1_to_2}
 
 
 class StoreError(RuntimeError):

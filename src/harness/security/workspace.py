@@ -29,19 +29,16 @@ def resolve_in_workspace(path: str | Path, workspace_root: Path) -> Path:
     workspace_root = workspace_root.resolve()
 
     try:
-        if path.is_absolute():
-            resolved = path.resolve()
-        else:
-            resolved = (workspace_root / path).resolve()
+        resolved = path.resolve() if path.is_absolute() else (workspace_root / path).resolve()
     except (OSError, RuntimeError) as e:
-        raise ToolError(f"Cannot resolve path: {e}", kind="denied")
+        raise ToolError(f"Cannot resolve path: {e}", kind="denied") from e
 
     try:
         resolved.relative_to(workspace_root)
-    except ValueError:
+    except ValueError as exc:
         raise ToolError(
             f"Path {resolved} is outside workspace {workspace_root}",
             kind="denied",
-        )
+        ) from exc
 
     return resolved

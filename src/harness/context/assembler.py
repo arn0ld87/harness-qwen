@@ -262,6 +262,10 @@ class PromptAssembler:
         self._append = list(messages)
         self._append_rewrites.append(note)
 
+    def restore_append(self, messages: Sequence[Message]) -> None:
+        """Restore a persisted append zone without recording a new rewrite."""
+        self._append = list(messages)
+
     # -- build -------------------------------------------------------------
 
     def build(self) -> AssembledPrompt:

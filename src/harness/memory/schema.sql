@@ -1,9 +1,7 @@
 -- Working and persistent memory.
 --
--- This file describes version 1 only. It is applied to a fresh database and
--- never edited to describe a later version: an existing database is moved
--- forward by the migration table in store.py, so a schema written by an older
--- harness is detected and upgraded rather than reinterpreted in place.
+-- This file describes the current schema for fresh databases. Existing
+-- databases move forward through the migration table in migrations.py.
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id            TEXT PRIMARY KEY,
@@ -51,6 +49,12 @@ CREATE TABLE IF NOT EXISTS task_state (
     step_index INTEGER NOT NULL,
     state_json TEXT    NOT NULL,
     updated_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runtime_state (
+    run_id       TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+    runtime_json TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS facts (

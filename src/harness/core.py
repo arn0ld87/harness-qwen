@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -201,6 +201,17 @@ class ToolError(RuntimeError):
         self.kind = kind
 
 
+class ExecutedToolStep(BaseModel):
+    """Durable tool execution used for resume and verification."""
+
+    id: int
+    run_id: str
+    step_index: int
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result: ToolResult
+
+
 # --------------------------------------------------------------------------
 # Protocol layer
 # --------------------------------------------------------------------------
@@ -215,6 +226,23 @@ class ToolAction(BaseModel):
     reason: str = ""
 
 
+class CommandEvidence(BaseModel):
+    """Reference to a successful command step classified by the harness."""
+
+    kind: Literal["test", "lint", "typecheck", "build"]
+    step_id: int = Field(gt=0)
+
+
+class FileEvidence(BaseModel):
+    """Reference to a workspace path checked against run-start state."""
+
+    kind: Literal["file", "patch"]
+    path: str
+
+
+Evidence = Annotated[CommandEvidence | FileEvidence, Field(discriminator="kind")]
+
+
 class AnswerAction(BaseModel):
     """The model considers the task complete.
 
@@ -224,7 +252,7 @@ class AnswerAction(BaseModel):
 
     action: Literal["answer"] = "answer"
     content: str
-    evidence: list[str] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
 
 
 Action = ToolAction | AnswerAction
@@ -279,6 +307,32 @@ class PlanStep(BaseModel):
     note: str | None = None
 
 
+class WorkspaceBaseline(BaseModel):
+    """Auditable workspace state captured before a run may change files."""
+
+    head_sha: str | None = None
+    status_sha256: str
+    diff_sha256: str
+    files: dict[str, str] = Field(default_factory=dict)
+    captured_at: datetime
+
+
+class RunRuntimeState(BaseModel):
+    """Runtime bookkeeping that must survive reconstruction of AgentLoop."""
+
+    run_id: str
+    executed_steps: list[ExecutedToolStep] = Field(default_factory=list)
+    recent_calls: list[tuple[str, str]] = Field(default_factory=list)
+    append_history: list[Message] = Field(default_factory=list)
+    active_step_index: int | None = None
+    tool_calls: int = 0
+    retries_used: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+    elapsed_s: float = 0.0
+
+
 class TaskState(BaseModel):
     """Durable task state. Written before each step so a killed run resumes."""
 
@@ -289,6 +343,7 @@ class TaskState(BaseModel):
     findings: list[str] = Field(default_factory=list)
     open_problems: list[str] = Field(default_factory=list)
     step_index: int = 0
+    workspace_baseline: WorkspaceBaseline | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -298,7 +353,6 @@ class Budget(BaseModel):
 
     max_steps: int = 20
     wall_clock_s: float = 1800.0
-    max_prompt_tokens: int = 16384
     max_output_tokens: int = 2048
     max_tool_calls: int = 60
     max_retries: int = 3

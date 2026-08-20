@@ -7,7 +7,7 @@ model reasoning content: there is no parameter for it anywhere in the public API
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,9 @@ class RunJournal:
         self.run_id = run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.journal_path = self.run_dir / "journal.jsonl"
-        self._file = open(self.journal_path, "a", encoding="utf-8")
+        self._file = open(  # noqa: SIM115 - the journal owns this handle until close()
+            self.journal_path, "a", encoding="utf-8"
+        )
 
     def log_step(
         self,
@@ -121,7 +123,7 @@ class RunJournal:
 
         All string values are redacted before serialization.
         """
-        record["timestamp"] = datetime.now(timezone.utc).isoformat()
+        record["timestamp"] = datetime.now(UTC).isoformat()
         record["run_id"] = self.run_id
 
         # Redact all string values recursively

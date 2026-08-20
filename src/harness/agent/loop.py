@@ -27,7 +27,7 @@ from typing import Any
 
 from harness.agent.retry import ErrorCategory, RetryPolicy
 from harness.agent.roles import RoleSequencer
-from harness.agent.verifier import ExecutedStep, Verifier
+from harness.agent.verifier import ExecutedStep, Verifier, capture_workspace_baseline
 from harness.context.assembler import AssembledPrompt, PrefixViolation, PromptAssembler
 from harness.context.budget import TokenBudget
 from harness.context.compressor import (
@@ -48,12 +48,14 @@ from harness.core import (
     ProviderError,
     Role,
     RunResult,
+    RunRuntimeState,
     StepStatus,
     StopReason,
     TaskState,
     ToolAction,
     Usage,
 )
+from harness.memory.migrations import StoreError
 from harness.memory.store import MemoryStore
 from harness.models.base import ModelProvider
 from harness.protocol.codec import ActionCodec
@@ -129,6 +131,8 @@ class AgentLoop:
         self._prompt_tokens = 0
         self._completion_tokens = 0
         self._cached_tokens = 0
+        self._elapsed_offset = 0.0
+        self._active_step_index: int | None = None
         self._started_monotonic = time.monotonic()
         self._cancelled = False
 
@@ -168,13 +172,15 @@ class AgentLoop:
                 return self._finalize(state, stop_reason=StopReason.NO_PROGRESS)
 
             await self._execute_tool(state, action)
-            state.step_index += 1
-            state.updated_at = _now()
-            self.memory.save_task_state(state)
 
     def _answer(self, state: TaskState, action: AnswerAction) -> RunResult:
         outcome = self.verifier.verify(
-            action, history=self._executed, workspace=self.workspace, since=state.created_at,
+            action,
+            history=self._executed,
+            run_id=self.run_id,
+            workspace=self.workspace,
+            since=state.created_at,
+            baseline=state.workspace_baseline,
         )
         if not outcome.verified:
             self.journal.log_event("verification_failed", notes=outcome.notes)
@@ -189,7 +195,11 @@ class AgentLoop:
     # -- one step: build, call the model, retry until a valid action -----
 
     async def _run_step(self, state: TaskState) -> _StepOutcome:
-        role = self.roles.apply(self.assembler, state.step_index)
+        if self._active_step_index == state.step_index:
+            role = self.roles.role_for_step(state.step_index)
+        else:
+            role = self.roles.apply(self.assembler, state.step_index)
+            self._active_step_index = state.step_index
         overflow_compressed = False
 
         while True:
@@ -263,11 +273,22 @@ class AgentLoop:
     # -- tool execution --------------------------------------------------
 
     async def _execute_tool(self, state: TaskState, action: ToolAction) -> None:
+        step_id = self.memory.append_step(
+            self.run_id,
+            step_index=state.step_index,
+            role=str(self.roles.role_for_step(state.step_index)),
+            action="tool_call",
+            tool=action.tool,
+            arguments=action.arguments,
+        )
         result = await self.tools.invoke(action.tool, action.arguments)
         self._tool_calls += 1
         self._executed.append(
             ExecutedStep(
-                step_index=state.step_index, tool=action.tool,
+                id=step_id,
+                run_id=self.run_id,
+                step_index=state.step_index,
+                tool=action.tool,
                 arguments=dict(action.arguments), result=result,
             )
         )
@@ -279,7 +300,19 @@ class AgentLoop:
         if not result.ok:
             note = f"step {state.step_index}: {action.tool} failed: {result.content[:200]}"
             state.open_problems.append(note)
+        state.step_index += 1
+        state.updated_at = _now()
+        self._active_step_index = None
         self._maybe_compress(state)
+        self.memory.save_tool_checkpoint(
+            step_id=step_id,
+            status=StepStatus.DONE if result.ok else StepStatus.FAILED,
+            task_state=state,
+            runtime_state=self._runtime_state(),
+            exit_code=result.exit_code,
+            error_kind=result.error_kind,
+            duration_ms=result.duration_ms,
+        )
 
     # -- context compression ---------------------------------------------
 
@@ -290,7 +323,7 @@ class AgentLoop:
         )
 
     def _try_compress(self, state: TaskState, *, trigger: str) -> bool:
-        """Run the ladder once; return whether any rung actually applied."""
+        """Run the ladder once and report whether it resolved the trigger."""
         outcomes = escalate(
             self.ladder, self._compression_state(), self.economics,
             current_step=state.step_index, max_steps=self.budget.max_steps,
@@ -300,7 +333,11 @@ class AgentLoop:
                 "compression", trigger=trigger, strategy=outcome.strategy,
                 applied=outcome.applied, freed_tokens=outcome.freed_tokens, reason=outcome.reason,
             )
-        return any(o.applied for o in outcomes)
+        if trigger == "context_overflow":
+            self._persist_runtime_state()
+        if trigger == "context_overflow":
+            return any(outcome.resolves_overflow for outcome in outcomes)
+        return any(outcome.applied for outcome in outcomes)
 
     def _maybe_compress(self, state: TaskState) -> None:
         report = self.token_budget.report(
@@ -325,6 +362,7 @@ class AgentLoop:
     def _apply_retry_feedback(self, category: ErrorCategory, feedback: str) -> None:
         self._retries_used += 1
         self.assembler.append(Message(role="user", content=f"[retry: {category}]\n{feedback}"))
+        self._persist_runtime_state()
 
     # -- request building, usage accounting, state I/O ----------------------
 
@@ -360,13 +398,20 @@ class AgentLoop:
         self._prompt_tokens += usage.prompt_tokens
         self._completion_tokens += usage.completion_tokens
         self._cached_tokens += usage.cached_tokens
+        self._persist_runtime_state()
 
     def _elapsed(self) -> float:
-        return time.monotonic() - self._started_monotonic
+        return self._elapsed_offset + time.monotonic() - self._started_monotonic
 
     def _load_or_start_state(self) -> TaskState:
         existing = self.memory.load_task_state(self.run_id)
         if existing is not None:
+            workspace_changed = (
+                Path(existing.workspace).resolve() != self.workspace.resolve()
+            )
+            if existing.goal != self.goal or workspace_changed:
+                raise StoreError(f"run {self.run_id!r} does not match goal or workspace")
+            self._restore_run_state()
             for step in self.memory.unfinished_steps(self.run_id):
                 self.memory.complete_step(
                     step.id, status=StepStatus.FAILED,
@@ -375,11 +420,52 @@ class AgentLoop:
             self.journal.log_event("run_resumed", step_index=existing.step_index)
             return existing
         now = _now()
-        state = TaskState(run_id=self.run_id, goal=self.goal, workspace=str(self.workspace),
-                           created_at=now, updated_at=now)
+        state = TaskState(
+            run_id=self.run_id,
+            goal=self.goal,
+            workspace=str(self.workspace),
+            workspace_baseline=capture_workspace_baseline(self.workspace),
+            created_at=now,
+            updated_at=now,
+        )
         self.memory.start_run(state)
+        self.memory.save_task_state(state)
+        self._persist_runtime_state()
         self.journal.log_event("run_started", goal=self.goal)
         return state
+
+    def _restore_run_state(self) -> None:
+        runtime = self.memory.load_runtime_state(self.run_id)
+        if runtime is None:
+            raise StoreError(f"run {self.run_id!r} has no persisted runtime state")
+        self._executed = list(runtime.executed_steps)
+        self._recent_calls.extend(runtime.recent_calls)
+        self.assembler.restore_append(runtime.append_history)
+        self._active_step_index = runtime.active_step_index
+        self._tool_calls = runtime.tool_calls
+        self._retries_used = runtime.retries_used
+        self._prompt_tokens = runtime.prompt_tokens
+        self._completion_tokens = runtime.completion_tokens
+        self._cached_tokens = runtime.cached_tokens
+        self._elapsed_offset = runtime.elapsed_s
+
+    def _persist_runtime_state(self) -> None:
+        self.memory.save_runtime_state(self._runtime_state())
+
+    def _runtime_state(self) -> RunRuntimeState:
+        return RunRuntimeState(
+            run_id=self.run_id,
+            executed_steps=self._executed,
+            recent_calls=list(self._recent_calls),
+            append_history=self.assembler.append_messages,
+            active_step_index=self._active_step_index,
+            tool_calls=self._tool_calls,
+            retries_used=self._retries_used,
+            prompt_tokens=self._prompt_tokens,
+            completion_tokens=self._completion_tokens,
+            cached_tokens=self._cached_tokens,
+            elapsed_s=self._elapsed(),
+        )
 
     def _finalize(
         self, state: TaskState, *, stop_reason: StopReason,
@@ -387,6 +473,7 @@ class AgentLoop:
     ) -> RunResult:
         state.updated_at = _now()
         self.memory.save_task_state(state)
+        self._persist_runtime_state()
         result = RunResult(
             run_id=self.run_id, stop_reason=stop_reason, answer=answer, verified=verified,
             verification_notes=notes or [], steps_taken=state.step_index,

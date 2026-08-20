@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from pathlib import Path
 
 from harness.core import Risk
 
@@ -109,7 +110,9 @@ _SYSTEM_DIR_RE = re.compile(
 _ROOT_TARGETS = frozenset({"/", "/*", "/.", "/..", "~", "~/*", "$HOME", "${HOME}", "$HOME/*"})
 
 
-def classify_command(command: str) -> tuple[Risk, str]:
+def classify_command(
+    command: str, *, workspace: str | Path | None = None
+) -> tuple[Risk, str]:
     """Classify a shell command string.
 
     Returns the risk and a human-readable reason. Every executable segment is
@@ -129,7 +132,7 @@ def classify_command(command: str) -> tuple[Risk, str]:
         if not segment.strip():
             continue
         seen_segment = True
-        verdict = _classify_segment(segment)
+        verdict = _classify_segment(segment, workspace=workspace)
         if _SEVERITY[verdict[0]] > _SEVERITY[worst[0]]:
             worst = verdict
     if not seen_segment:
@@ -320,7 +323,9 @@ def _head(tokens: list[str]) -> tuple[list[str], bool]:
     return tokens[i:], privileged
 
 
-def _classify_segment(segment: str) -> tuple[Risk, str]:
+def _classify_segment(
+    segment: str, *, workspace: str | Path | None
+) -> tuple[Risk, str]:
     try:
         tokens = shlex.split(segment)
     except ValueError as exc:
@@ -339,11 +344,44 @@ def _classify_segment(segment: str) -> tuple[Risk, str]:
 
     rest, privileged = _head(tokens)
     verdict = _confirm_or_allow(rest)
+    if verdict[0] is Risk.ALLOW:
+        workspace_risk = _workspace_operand_risk(tokens, workspace=workspace)
+        if workspace_risk is not None:
+            verdict = workspace_risk
     if privileged and _SEVERITY[verdict[0]] < _SEVERITY[Risk.CONFIRM]:
         verdict = (Risk.CONFIRM, "runs with elevated privileges")
     if redirect is not None and _SEVERITY[redirect[0]] > _SEVERITY[verdict[0]]:
         verdict = redirect
     return verdict
+
+
+def _workspace_operand_risk(
+    tokens: list[str], *, workspace: str | Path | None
+) -> tuple[Risk, str] | None:
+    """Reject operands that a nominally read-only command resolves outside."""
+    if not tokens:
+        return None
+    root = Path(workspace).resolve() if workspace is not None else None
+    for token in tokens[1:]:
+        if token == "--":
+            continue
+        candidate = token.split("=", 1)[1] if token.startswith("-") and "=" in token else token
+        candidate = re.sub(r"^\d*<+", "", candidate)
+        if candidate.startswith("-") or not candidate:
+            continue
+        if "$" in candidate or candidate.startswith("~"):
+            return Risk.DENY, f"path expansion is outside the workspace boundary: {candidate}"
+        path = Path(candidate)
+        if root is None:
+            if path.is_absolute() or ".." in path.parts:
+                return Risk.DENY, f"path is outside the workspace boundary: {candidate}"
+            continue
+        try:
+            resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+            resolved.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            return Risk.DENY, f"path is outside the workspace boundary: {candidate}"
+    return None
 
 
 def _confirm_or_allow(tokens: list[str]) -> tuple[Risk, str]:
