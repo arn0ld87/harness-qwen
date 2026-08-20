@@ -365,51 +365,54 @@ def test_an_input_redirect_target_is_checked_as_a_path(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The classifier's private splitter must match the exported one
+# One splitter, not two
 # ---------------------------------------------------------------------------
+
+
+def test_the_classifier_uses_the_exported_splitter() -> None:
+    """There must not be a second copy to drift from (#33).
+
+    ``classifier.py`` used to carry a private duplicate of the splitter, and
+    only the duplicate decided what got classified — so ``shellsplit.py``
+    could be tested to exhaustion and prove nothing about the enforcing code.
+    The two had already drifted in their reason strings when this was found.
+    """
+    assert not hasattr(classifier, "_split_segments")
+    assert classifier.split_segments is split_segments
 
 
 @pytest.mark.parametrize(
     "command",
     [
         "ls; rm -rf /",
-        "ls && cat $(id) || `whoami`",
-        "echo 'a; b' | grep \"c && d\"",
-        "ls 2>&1 &> log & shutdown",
-        "cat $(echo $(echo x))",
+        "ls && rm -rf / || true",
+        "echo $(rm -rf /)",
+        "echo `rm -rf /`",
+        "cat <(rm -rf /)",
+        "ls 2>&1 &> log & rm -rf /",
+        "cat $(echo $(rm -rf /))",
         "$(rm -rf /",
-        "ls \\\n -la",
-        # Quoting inside a substitution body: a ")" behind a quote or a
-        # backslash must not end the body early in either copy.
-        'cat $(echo "a\\"b)" )',
-        "echo $(echo ')')",
-        "cat `echo \\` x`",
-        "cat `id",
+        "cat `rm -rf /",
     ],
 )
-def test_both_splitters_agree_segment_for_segment(command: str) -> None:
-    """``classifier.py`` keeps a private copy of ``shellsplit.split_segments``.
+def test_a_denied_command_is_found_in_every_shell_construct(
+    command: str, tmp_path: Path
+) -> None:
+    """Whatever the plumbing, the shell still runs it — so it is classified.
 
-    Only the private copy decides what gets classified, so the exported one can
-    be tested to exhaustion and prove nothing unless the two stay identical.
+    Each of these is a way to reach the same command; an unbalanced opener is
+    included because the shell would still execute what follows it.
     """
-    assert classifier._split_segments(command) == split_segments(command)
+    risk, _ = classify_command(command, workspace=tmp_path)
+
+    assert risk is Risk.DENY
 
 
 # ---------------------------------------------------------------------------
-# Known gap — see the report on issue #32
+# Audit trail (closed in #33)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: the initial 'worst' verdict is (ALLOW, 'no executable segment') "
-        "and a tie in severity never replaces it, so every allowed command is "
-        "reported with a reason describing something else. The verdict is "
-        "correct, the audit trail is not. Behaviour change — own issue."
-    ),
-)
 def test_an_allowed_command_reports_its_own_reason(tmp_path: Path) -> None:
     _risk, reason = classify_command("ls", workspace=tmp_path)
 

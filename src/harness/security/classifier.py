@@ -17,13 +17,12 @@ import shlex
 from pathlib import Path
 
 from harness.core import Risk
+from harness.security.shellsplit import TOO_DEEP, split_segments
 
 _SEVERITY: dict[Risk, int] = {Risk.ALLOW: 0, Risk.CONFIRM: 1, Risk.DENY: 2}
 
 # Substitutions are lifted out into their own segments; the outer segment keeps
 # a placeholder so token positions (and therefore the head command) survive.
-_SUBST = "__harness_subst__"
-_MAX_SUBST_DEPTH = 8
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _NUMERIC_ARG_RE = re.compile(r"^\d+(\.\d+)?[smhd]?$")
@@ -126,136 +125,25 @@ def classify_command(
     if _DROP_DATABASE_RE.search(command):
         return Risk.DENY, "drops a database"
 
-    worst: tuple[Risk, str] = (Risk.ALLOW, "no executable segment")
-    seen_segment = False
-    for segment in _split_segments(command):
+    worst: tuple[Risk, str] | None = None
+    for segment in split_segments(command):
         if not segment.strip():
             continue
-        seen_segment = True
+        if segment == TOO_DEEP:
+            # Part of the command was never read. Reporting the part that was
+            # would be a verdict on something other than what runs.
+            return Risk.CONFIRM, "substitution nested too deeply to classify"
         verdict = _classify_segment(segment, workspace=workspace)
-        if _SEVERITY[verdict[0]] > _SEVERITY[worst[0]]:
+        # Ties keep the first verdict, so a command reports the rule that
+        # actually matched it rather than a placeholder — the reason is what
+        # ends up in the journal.
+        if worst is None or _SEVERITY[verdict[0]] > _SEVERITY[worst[0]]:
             worst = verdict
-    if not seen_segment:
+    if worst is None:
         return Risk.CONFIRM, "command contains no executable segment"
     return worst
 
 
-# --------------------------------------------------------------------------
-# Shell splitting
-# --------------------------------------------------------------------------
-
-
-def _read_balanced(text: str, start: int) -> tuple[str, int]:
-    """Read to the ``)`` closing a ``$(`` opened before ``start``."""
-    depth = 1
-    i = start
-    quote: str | None = None
-    while i < len(text):
-        ch = text[i]
-        if quote is not None:
-            if ch == "\\" and quote == '"' and i + 1 < len(text):
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-            i += 1
-            continue
-        if ch in "'\"":
-            quote = ch
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return text[start:i], i + 1
-        i += 1
-    return text[start:], len(text)
-
-
-def _read_backtick(text: str, start: int) -> tuple[str, int]:
-    i = start
-    while i < len(text):
-        if text[i] == "\\" and i + 1 < len(text):
-            i += 2
-            continue
-        if text[i] == "`":
-            return text[start:i], i + 1
-        i += 1
-    return text[start:], len(text)
-
-
-def _split_segments(command: str, depth: int = 0) -> list[str]:
-    """Split into the segments a shell would execute, substitutions included."""
-    segments: list[str] = []
-    nested: list[str] = []
-    current: list[str] = []
-    in_single = in_double = False
-    i, n = 0, len(command)
-
-    def flush() -> None:
-        segments.append("".join(current))
-        current.clear()
-
-    while i < n:
-        ch = command[i]
-        if in_single:
-            current.append(ch)
-            if ch == "'":
-                in_single = False
-            i += 1
-            continue
-        if ch == "\\" and i + 1 < n:
-            current.append(command[i:i + 2])
-            i += 2
-            continue
-        if command.startswith("$(", i):
-            inner, i = _read_balanced(command, i + 2)
-            nested.append(inner)
-            current.append(_SUBST)
-            continue
-        if ch == "`":
-            inner, i = _read_backtick(command, i + 1)
-            nested.append(inner)
-            current.append(_SUBST)
-            continue
-        if in_double:
-            current.append(ch)
-            if ch == '"':
-                in_double = False
-            i += 1
-            continue
-        if ch == "'":
-            in_single = True
-            current.append(ch)
-            i += 1
-            continue
-        if ch == '"':
-            in_double = True
-            current.append(ch)
-            i += 1
-            continue
-        if command.startswith("&&", i) or command.startswith("||", i):
-            flush()
-            i += 2
-            continue
-        # "2>&1" and "&>log" are file descriptor plumbing, not separators.
-        if ch == "&" and ("".join(current).rstrip().endswith(">")
-                          or command.startswith("&>", i)):
-            current.append(ch)
-            i += 1
-            continue
-        if ch in ";|&\n":
-            flush()
-            i += 1
-            continue
-        current.append(ch)
-        i += 1
-    flush()
-
-    if depth < _MAX_SUBST_DEPTH:
-        for inner in nested:
-            segments.extend(_split_segments(inner, depth + 1))
-    return segments
 
 
 # --------------------------------------------------------------------------

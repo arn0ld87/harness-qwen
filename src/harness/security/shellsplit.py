@@ -16,6 +16,13 @@ from __future__ import annotations
 # placeholder so token positions (and therefore the head command) survive.
 SUBSTITUTION_PLACEHOLDER = "__harness_subst__"
 
+TOO_DEEP = "__harness_substitution_too_deep__"
+"""Emitted instead of an unread body when nesting exceeds the cap.
+
+A segment rather than an exception: callers split commands they did not write
+and must still get an answer, and this answer is "I could not read all of it",
+which classifies as CONFIRM."""
+
 _MAX_DEPTH = 8
 
 
@@ -44,6 +51,15 @@ def split_segments(command: str, depth: int = 0) -> list[str]:
             i += 2
             continue
         if command.startswith("$(", i):
+            inner, i = _read_balanced(command, i + 2)
+            nested.append(inner)
+            current.append(SUBSTITUTION_PLACEHOLDER)
+            continue
+        # Process substitution runs its body exactly like $(...) does; only
+        # the plumbing differs. Left in place it reaches the classifier as an
+        # operand, and "<(reboot)" then reads as a relative path — which is
+        # how a denied command travelled inside an allowed one.
+        if command.startswith("<(", i) or command.startswith(">(", i):
             inner, i = _read_balanced(command, i + 2)
             nested.append(inner)
             current.append(SUBSTITUTION_PLACEHOLDER)
@@ -90,6 +106,11 @@ def split_segments(command: str, depth: int = 0) -> list[str]:
     if depth < _MAX_DEPTH:
         for inner in nested:
             segments.extend(split_segments(inner, depth + 1))
+    elif nested:
+        # The cap stops runaway recursion, but dropping the body would let a
+        # deeply nested command through unread — a limit that fails open is
+        # worse than no limit, because it looks like a verdict.
+        segments.append(TOO_DEEP)
     return segments
 
 

@@ -19,7 +19,11 @@ import pytest
 
 from harness.core import Risk
 from harness.security import classify_command
-from harness.security.shellsplit import SUBSTITUTION_PLACEHOLDER, split_segments
+from harness.security.shellsplit import (
+    SUBSTITUTION_PLACEHOLDER,
+    TOO_DEEP,
+    split_segments,
+)
 
 SUBST = SUBSTITUTION_PLACEHOLDER
 
@@ -231,13 +235,17 @@ def test_a_backslash_inside_a_double_quoted_substitution_body_is_skipped() -> No
 
 
 def test_the_substitution_depth_cap_bounds_the_recursion() -> None:
-    """Nesting beyond the cap stops producing segments (see the xfail below)."""
+    """The cap stops the recursion — and says so instead of going quiet."""
     command = "echo x"
     for _ in range(12):
         command = f"echo $({command})"
 
-    # One segment per level up to the cap, plus the outermost one.
-    assert len(split_segments(command)) == 9
+    segments = split_segments(command)
+
+    # One segment per level up to the cap, plus the outermost one, plus the
+    # marker standing in for everything below it.
+    assert len(segments) == 10
+    assert segments[-1] == TOO_DEEP
 
 
 # ---------------------------------------------------------------------------
@@ -274,15 +282,6 @@ def test_a_backgrounding_ampersand_after_a_redirect_target_still_splits() -> Non
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: process substitution '<(...)' / '>(...)' is never lifted into a "
-        "segment, so the command inside it is executed by /bin/sh but never "
-        "classified. Fixing this changes security behaviour and belongs in its "
-        "own issue (#32 is scope-limited to making the current policy testable)."
-    ),
-)
 def test_process_substitution_is_split_out() -> None:
     assert executable_segments("diff <(shutdown) file.txt") == [
         f"diff {SUBST} file.txt",
@@ -290,14 +289,6 @@ def test_process_substitution_is_split_out() -> None:
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: process substitution reaches the classifier as an operand, not a "
-        "command, so 'cat <(reboot)' is ALLOW while /bin/sh runs reboot. "
-        "Behaviour change — own issue."
-    ),
-)
 def test_a_denied_command_cannot_hide_inside_a_process_substitution(
     tmp_path: Path,
 ) -> None:
@@ -306,14 +297,6 @@ def test_a_denied_command_cannot_hide_inside_a_process_substitution(
     assert risk is not Risk.ALLOW
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: the substitution depth cap fails open. Beyond eight levels the "
-        "nested body is dropped instead of being reported, so a deeply nested "
-        "'shutdown' classifies as ALLOW. Behaviour change — own issue."
-    ),
-)
 def test_substitution_deeper_than_the_cap_is_not_silently_allowed(
     tmp_path: Path,
 ) -> None:

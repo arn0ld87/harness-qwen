@@ -114,6 +114,12 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    Migration, beschaedigter TaskState, Byte-Gleichheit der DB nach dem Lauf.
 - [x] #16 `harness doctor` ausbauen (Sandbox/Port/Health/JSON-Exit, auf #7/#10/#12)
 
+#### Sub-Slice 33.1 — Prozess-Substitution und fail-closed Tiefenlimit
+- [x] `<(...)`/`>(...)` werden wie `$(...)` als Segment klassifiziert
+- [x] Tiefenlimit endet in CONFIRM statt ALLOW
+- [x] ALLOW traegt die Begruendung der Regel, die zugetroffen hat
+- [x] Splitter dedupliziert: classifier importiert shellsplit
+
 ### Phase C — v0.4 Retrieval & Benchmarks
 - [ ] #17 retrieval/ Retriever-Interface + SqliteFtsRetriever (FTS5-Fallback)
 - [ ] #18 Retrieval als Tool in ToolRegistry (Append-Zone, Prefix-stabil, E2E)
