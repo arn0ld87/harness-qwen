@@ -9,6 +9,7 @@ likely.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 _HEX_ONLY = re.compile(r"[0-9a-fA-F]+")
 
@@ -86,3 +87,21 @@ def redact(text: str) -> str:
     result = re.sub(r'(?<!\[redacted:)[A-Za-z0-9+/]{40,}={0,2}(?!\])', _blob, result)
 
     return result
+
+
+def redact_data(value: Any) -> Any:
+    """Apply :func:`redact` to every string inside a JSON-shaped structure.
+
+    Structure-preserving on purpose. Callers that inspect stored data need
+    both a printable object and valid JSON out of the same pass, so a variant
+    that rendered to text first would force one of them to parse it back.
+    Each value is scrubbed on its own: running the patterns over a whole
+    rendered line redacts ``max_output_tokens`` for containing the word TOKEN.
+    """
+    if isinstance(value, dict):
+        return {key: redact_data(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_data(item) for item in value]
+    if isinstance(value, str):
+        return redact(value)
+    return value

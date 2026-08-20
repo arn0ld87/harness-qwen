@@ -46,6 +46,32 @@ class UnknownRunError(StoreError):
     """An operation referenced a run_id that has no row in ``runs``."""
 
 
+def check_schema(conn: sqlite3.Connection, label: str = "database") -> int:
+    """Assert the database already is at :data:`SCHEMA_VERSION` and return it.
+
+    The read-only counterpart of :func:`ensure_schema`, for callers that only
+    want to look: reading a database is not consent to rewrite it, and an
+    inspection that silently migrated would perform the one irreversible act
+    its user was trying to avoid.
+
+    Raises:
+        SchemaVersionError: The database is at another version, or carries no
+            harness schema at all.
+    """
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if version == SCHEMA_VERSION:
+        return version
+    if version == 0 and not object_exists(conn, "table", "runs"):
+        raise SchemaVersionError(
+            f"{label}: no harness schema in this database — it is empty or "
+            "belongs to something else"
+        )
+    raise SchemaVersionError(
+        f"{label}: schema version {version} is not the supported "
+        f"{SCHEMA_VERSION}; opening it read-only will not migrate it"
+    )
+
+
 def object_exists(conn: sqlite3.Connection, kind: str, name: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?", (kind, name)

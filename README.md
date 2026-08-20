@@ -58,13 +58,15 @@ Implemented:
   workspace-baselined patch verification and SQLite resume state.
 - Typed tools, output compression, deterministic command classification,
   bubblewrap filesystem isolation where available, and redacted telemetry.
+- Configuration resolution with provenance, and read-only CLI inspection of
+  both the effective configuration and the memory store.
 - CI tests run without a model or GPU.
 
 Planned, not implemented:
 - llama-server process supervision (`runtime/`). The current provider attaches
   to an already running endpoint; it does not launch or restart the server.
 - Retrieval adapters (`retrieval/`) and benchmark runners (`benchmark/`).
-- The task-running, chat, benchmark, config and memory-inspection CLI commands.
+- The task-running, chat and benchmark CLI commands.
 - No benchmarks have been run yet. The claim that this harness beats a
   plain prompt loop on real tasks is the point of the project, not an
   assumption — see the "What 'done' means" section of `VISION.md`.
@@ -103,11 +105,16 @@ Implemented CLI commands:
 ```
 harness doctor              # check hardware, runtime, and model against discovery
 harness model-info PATH     # report metadata from a GGUF file
+harness config show         # effective configuration and where each value came from
+harness memory inspect      # runs, resume state, step history and stored facts
 harness version             # print the package version
 ```
 
-`run`, `chat`, `benchmark`, `config` and `memory inspect` are planned and do
-not exist yet.
+Both inspection commands take `--json` for automation, redact secrets in
+either mode, and open the memory database read-only — looking at a store
+never migrates or repairs it.
+
+`run`, `chat` and `benchmark` are planned and do not exist yet.
 
 ## Documentation
 

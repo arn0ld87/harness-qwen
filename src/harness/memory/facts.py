@@ -97,10 +97,21 @@ class FactStore:
     """Fact operations over an already-open, already-migrated connection."""
 
     def __init__(
-        self, conn: sqlite3.Connection, lock: threading.RLock, *, fts5: bool
+        self,
+        conn: sqlite3.Connection,
+        lock: threading.RLock,
+        *,
+        fts5: bool,
+        read_only: bool = False,
     ) -> None:
         self._conn = conn
         self._lock = lock
+        if read_only:
+            # Building or repairing the index is a write. A reader takes the
+            # index as it finds it and falls back to the LIKE scan, which
+            # returns the same answers on a store this small.
+            self.fts5 = fts5 and object_exists(conn, "table", "facts_fts")
+            return
         self.fts5 = fts5
         self._ensure_fts()
 
