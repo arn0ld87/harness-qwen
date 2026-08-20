@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "name": "model-capabilities",
+  "description": "Runtime-level capability checks for the served model. DISCOVERY.md section 6 confirms that llama-server offers two independent hard sampling constraints - a JSON schema and native tool calls - and that neither is injected into the prompt. Which one the model actually complies with more reliably is an empirical question, and these cases are how it gets answered instead of assumed. No case sets a seed: with a fixed seed and an identical prompt every repetition returns the same text, so a compliance rate over five samples would be 0 or 100 by construction and would measure nothing.",
+  "defaults": {
+    "max_tokens": 256,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "repetitions": 5,
+    "warmup": 1
+  },
+  "cases": [
+    {
+      "id": "json_schema_constrained",
+      "description": "Structured output through the sampling constraint. The schema is attached to the request, never pasted into the prompt, so this case and 'json_unconstrained' put an identical prompt in front of the model and differ only in whether the constraint is active.",
+      "tags": ["structured-output", "json"],
+      "system": "You answer questions about arithmetic. Reply with a JSON object.",
+      "prompt": "What is 17 multiplied by 23? Give the numeric result and a one-sentence justification.",
+      "output_mode": "json_schema",
+      "json_schema": {
+        "type": "object",
+        "properties": {
+          "answer": { "type": "integer" },
+          "reasoning": { "type": "string" }
+        },
+        "required": ["answer", "reasoning"],
+        "additionalProperties": false
+      },
+      "expect": {
+        "kind": "json_object",
+        "required_keys": ["answer", "reasoning"]
+      }
+    },
+    {
+      "id": "json_unconstrained",
+      "description": "The control for 'json_schema_constrained'. Same prompt, no sampling constraint - the difference between the two success rates is what the constraint is worth on this model, which is the number that decides whether the protocol layer needs it.",
+      "tags": ["structured-output", "json", "control"],
+      "system": "You answer questions about arithmetic. Reply with a JSON object.",
+      "prompt": "What is 17 multiplied by 23? Give the numeric result and a one-sentence justification.",
+      "output_mode": "text",
+      "expect": {
+        "kind": "json_object",
+        "required_keys": ["answer", "reasoning"]
+      }
+    },
+    {
+      "id": "native_tool_call",
+      "description": "Native tool calling under the lazy grammar. A task that cannot be answered from the prompt alone, so choosing to answer in prose is a failure rather than a style preference.",
+      "tags": ["tool-calls"],
+      "system": "You are a coding assistant with tools. Use a tool when the answer is not in front of you.",
+      "prompt": "How many lines does the file src/harness/core.py have? Do not guess.",
+      "output_mode": "tools",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 text file from the workspace.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Path relative to the workspace root." }
+              },
+              "required": ["path"]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "list_directory",
+            "description": "List the entries of a workspace directory.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string" }
+              },
+              "required": ["path"]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "kind": "tool_call",
+        "value": "read_file"
+      }
+    },
+    {
+      "id": "tool_choice_between_two",
+      "description": "Two plausible tools, one correct. Measures whether tool selection survives the presence of a near neighbour - the failure mode that matters for a registry that will hold more than two entries.",
+      "tags": ["tool-calls", "selection"],
+      "system": "You are a coding assistant with tools. Use a tool when the answer is not in front of you.",
+      "prompt": "What files are directly inside the directory src/harness/tools?",
+      "output_mode": "tools",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 text file from the workspace.",
+            "parameters": {
+              "type": "object",
+              "properties": { "path": { "type": "string" } },
+              "required": ["path"]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "list_directory",
+            "description": "List the entries of a workspace directory.",
+            "parameters": {
+              "type": "object",
+              "properties": { "path": { "type": "string" } },
+              "required": ["path"]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "kind": "tool_call",
+        "value": "list_directory"
+      }
+    },
+    {
+      "id": "prefix_cache_reuse",
+      "description": "Not a capability case: this one measures the prompt cache. A fixed system block is repeated verbatim, so every repetition after the warmup should report a cache hit ratio near 1 and a wall clock far below the first call. DISCOVERY.md section 4 measured that gap at roughly 50x on this build; the ratio is what matters here, not the absolute prefix size. A run where the measured samples reprocess the prefix has a prefix-stability problem, and this case is where it becomes visible.",
+      "tags": ["cache", "latency"],
+      "system": "You are the reviewer role of a local coding harness. You read diffs, name concrete defects, and refuse to claim that anything was verified without evidence. You never restate the code back to the author, you never praise, and you answer in at most three sentences. When a change is fine, you say so in one line and stop.",
+      "prompt": "Summarise your own instructions in one sentence.",
+      "output_mode": "text",
+      "max_tokens": 96,
+      "repetitions": 5,
+      "warmup": 1
+    }
+  ]
+}

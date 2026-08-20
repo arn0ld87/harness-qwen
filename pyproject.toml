@@ -55,6 +55,11 @@ total = 66.0
 
 [tool.coverage_gate.modules]
 agent = 88.0       # measured 90.9
+benchmark = 93.0   # measured 96.1 — new, exercised end to end against
+                   # FakeProvider and stubbed port probes. High on purpose:
+                   # this is the module every measured claim in the repo
+                   # rests on, so an untested path here is a number nobody
+                   # checked (#19).
 context = 80.0     # measured 83.2
 memory = 75.0      # measured 77.9
 protocol = 65.0    # measured 68.7

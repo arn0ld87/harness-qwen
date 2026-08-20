@@ -75,10 +75,12 @@ Implemented since the initial version:
 Planned, not implemented:
 - Retrieval as an agent tool (the module and FTS5 index exist, but the model
   has no tool to query them yet).
-- Benchmark runners (`benchmark/`) and the flag sweep.
-- No benchmarks have been run yet. The claim that this harness beats a
-  plain prompt loop on real tasks is the point of the project, not an
-  assumption — see the "What 'done' means" section of `VISION.md`.
+- The benchmark flag sweep and the harness-vs-plain-loop comparison. The
+  `benchmark/` framework itself is implemented — suite, runner, fingerprint,
+  percentiles, JSON artefact — but no sweep against the 35B model has been
+  run yet. The claim that this harness beats a plain prompt loop on real
+  tasks is the point of the project, not an assumption — see the "What 'done'
+  means" section of `VISION.md`.
 
 ## Requirements
 
@@ -127,8 +129,9 @@ read-only — looking at a store never migrates or repairs it.
 
 `run` supports `--resume`, `--approve-confirmable`, budget overrides and
 config-file overrides. `chat` provides `/status`, `/context`, `/usage`,
-`/help` and `/exit` session commands. `benchmark` is planned and does not
-exist yet.
+`/help` and `/exit` session commands. The `benchmark/` library (suite,
+runner, fingerprint, percentiles, JSON artefact) is implemented; a
+`harness benchmark` CLI over it is planned and does not exist yet.
 
 ## Documentation
 

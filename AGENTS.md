@@ -35,7 +35,7 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/cli_run.py` | `run` command with resume, overrides, `--approve-confirmable` |
 | `src/harness/cli_chat.py` | `chat` command: `/status`, `/context`, `/usage`, `/exit` |
 | `src/harness/cli_inspect.py` | `config show` and `memory inspect` with `--json` |
-| `src/harness/benchmark/` | Planned; not implemented |
+| `src/harness/benchmark/` | Reproducible capability and performance runs: fingerprint, warmup/measure phases, percentiles, JSON artefact |
 
 ## Code style
 
@@ -71,6 +71,7 @@ client.
 | Package | Floor | Measured 2026-08-20 |
 |---|---|---|
 | `agent` | 88% | 91.2% |
+| `benchmark` | 93% | 96.1% |
 | `config` | 95% | 98.0% |
 | `diagnostics` | 85% | 86.5% |
 | `context` | 80% | 83.5% |
@@ -96,7 +97,9 @@ Floors start just below the measured baseline — a gate that ships red teaches
 everyone to ignore it. Raise them in `pyproject.toml`, no code change needed.
 `security` carries the highest floor in the tree rather than the lowest
 (#32): this is the module where an untested path is a security claim nobody
-checked.
+checked. `benchmark` sits just under it for the parallel reason (#19) —
+every measured claim in this repository comes out of that module, so a gap
+there is a number nobody checked.
 
 ## Non-negotiables
 

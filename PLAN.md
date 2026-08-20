@@ -8,7 +8,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 
 - v0.2 Hardening (#5–#9, #33): COMPLETE
 - v0.3 Runtime & CLI (#10–#16): COMPLETE
-- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17 abgeschlossen, #18–#22 offen
+- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17 und #19 abgeschlossen, #18 sowie #20–#22 offen
 
 ## Ausfuehrungsprotokoll
 
@@ -98,7 +98,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 ### Phase C — v0.4 Retrieval & Benchmarks (PARTIAL)
 - [x] #17 `retrieval/` Retriever-Interface + SqliteFtsRetriever (FTS5-Fallback)
 - [ ] #18 Retrieval als Tool in ToolRegistry (Append-Zone, Prefix-stabil, E2E)
-- [ ] #19 `benchmark/` Framework (ID, Fingerprint, Warmup/Mess, JSON, Perzentile)
+- [x] #19 `benchmark/` Framework (ID, Fingerprint, Warmup/Mess, JSON, Perzentile)
 - [ ] #20 Flag-Sweep (Prozessidentitaet, Invaliditaetsregeln)
 - [ ] #21 Harness vs Plain Loop (Task-Suite, Metriken, cold/warm, negative Results)
 - [ ] #22 Cache-/Prefix-Invarianten (Prefix-Hash pro Call, Cache-Hit-Quote)

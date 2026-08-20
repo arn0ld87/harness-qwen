@@ -436,6 +436,108 @@ enabled, and including them corrupts every offload calculation downstream.
 
 ---
 
+## `harness.benchmark`
+
+```python
+class BenchmarkSuite(BaseModel):      # loaded from JSON, defaults merged per case
+    name: str
+    defaults: CaseDefaults
+    cases: list[BenchmarkCase]
+    def select(self, ids: list[str]) -> BenchmarkSuite: ...
+
+class BenchmarkCase(BaseModel):
+    id: str
+    system: str | None
+    prompt: str
+    output_mode: OutputMode           # text | json_schema | tools
+    json_schema: dict | None
+    tools: list[dict] | None
+    repetitions: int                  # >= 1
+    warmup: int                       # >= 0
+    expect: Expectation               # none | json_object | tool_call | contains | regex
+    def to_request(self) -> GenerationRequest: ...
+
+def load_suite(path) -> BenchmarkSuite: ...
+```
+
+A case declaring `output_mode="json_schema"` without a schema is rejected at
+load time. Accepting it would silently downgrade the case to a plain text
+call: the run completes, the numbers look normal, and the question measured is
+not the one written in the file.
+
+```python
+class BenchmarkRunner:
+    def __init__(self, provider, resolved, *, handle=None, profile=None,
+                 sample_resources=None, clock=..., now=...,
+                 inspect=inspect_port_async, verify=verify_owner) -> None: ...
+    async def run(self, suite, *, run_id=None) -> BenchmarkRun: ...
+```
+
+`run()` verifies the serving process **before** measuring anything and again
+after the last sample. An owned runtime whose port is held by a different pid
+raises `RuntimeIdentityMismatch` with nothing measured; a process that changed
+*during* the run appends an `Invalidation` instead, because by then the samples
+exist and they are the evidence that something moved. An attached runtime
+cannot be verified at all: it is measured, `identity_verified` is false, and
+`launch_argv` stays `None` rather than implying this harness chose those flags.
+
+```python
+class BenchmarkRun(BaseModel):
+    schema_version: int
+    run_id: str                       # bench-<UTC timestamp>-<random>
+    suite: str
+    started_at: datetime
+    finished_at: datetime | None
+    fingerprint: Fingerprint          # host, runtime, model, effective config + provenance
+    cases: list[CaseResult]
+    resources: list[ResourceSample]   # before and after the whole run
+    invalidations: list[Invalidation]
+    warnings: list[str]
+
+    @property
+    def valid(self) -> bool: ...
+    def invalidated(self, reason, *, detail=None) -> BenchmarkRun: ...
+
+class CaseResult(BaseModel):
+    warmup_samples: list[SampleMetrics]     # recorded, excluded from the statistics
+    samples: list[SampleMetrics]
+    failures: int
+    success_rate: float | None
+    wall_clock_ms: Distribution | None
+    generation_tokens_per_s: Distribution | None
+    prompt_tokens_per_s: Distribution | None
+    time_to_first_token_ms: Distribution | None
+    cache_hit_ratio: Distribution | None
+    resources: list[ResourceSample]
+```
+
+`Distribution` reports `min/p50/p90/p95/p99/max`, the MAD, and the indices of
+samples whose modified z-score exceeds 3.5. Outliers are **labelled, never
+dropped**: at 24.83 s cold against 0.49 s cached, the outlier is usually the
+most informative sample in the series. `None` rather than a zeroed record
+means nothing was measured — a case whose every repetition failed has no
+latency, and `0.0 ms` would read as "instant".
+
+Warmup exists for the same measurement. The first call after a prefix change
+reprocesses the whole prompt; folding one warmup into five repetitions moves
+the reported mean by seconds and makes the result depend on the warmup policy
+rather than on the runtime.
+
+```python
+def write_run(run, directory) -> Path: ...       # <directory>/<run_id>.json
+def read_run(path) -> BenchmarkRun: ...
+def invalidate_artifact(path, reason, *, detail=None) -> BenchmarkRun: ...
+def render_summary(run) -> str: ...
+```
+
+Invalidation appends and rewrites in place; it never moves or deletes the
+artefact. The invalidated run is the evidence for its own invalidation.
+
+No sample carries model output. Token counts, timings, finish reason and a
+deterministic verdict — never the response text and never reasoning.
+
+---
+
 ## Runtime HTTP surface
 
 Endpoints the harness uses on `llama-server`:
