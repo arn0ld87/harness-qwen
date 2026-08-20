@@ -58,6 +58,8 @@ agent = 88.0       # measured 90.9
 context = 80.0     # measured 83.2
 memory = 75.0      # measured 77.9
 protocol = 65.0    # measured 68.7
+retrieval = 97.0   # measured 100.0 — a small module whose every branch (FTS5
+                   # and fallback) is exercised, so the floor stays high
 security = 97.0    # measured 99.4 after #32. The package where an untested
                    # path is an unchecked security claim, so it carries the
                    # highest floor in the tree, not the lowest.

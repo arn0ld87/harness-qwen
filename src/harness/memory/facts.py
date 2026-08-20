@@ -52,6 +52,20 @@ class Fact(BaseModel):
     updated_at: datetime
 
 
+class FactMatch(BaseModel):
+    """A fact together with why it ranked where it did.
+
+    ``score`` is comparable only inside one result set: FTS5 yields a
+    negated bm25 value, the fallback a term-occurrence count. ``strategy``
+    is carried alongside so a caller can tell the two apart instead of
+    reading a number that silently changed meaning.
+    """
+
+    fact: Fact
+    score: float
+    strategy: str
+
+
 def fts5_available() -> bool:
     """Whether this SQLite build can create FTS5 tables.
 
@@ -91,6 +105,38 @@ def split_terms(query: str) -> list[str]:
     if current:
         out.append("".join(current))
     return out
+
+
+def _fact_from(row: sqlite3.Row) -> Fact:
+    """Project a row onto :class:`Fact`, ignoring any ranking column joined in."""
+    return Fact(
+        key=row["key"],
+        value=row["value"],
+        category=row["category"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _like_score(row: sqlite3.Row, terms: list[str]) -> float:
+    """Rank a fallback hit by how often the terms actually occur in it.
+
+    Substring occurrences rather than token hits, because that is what the
+    LIKE filter matched — a score computed on a different notion of "match"
+    than the filter would reorder rows for reasons the filter never saw. The
+    key weighs double: a term in the key names the fact, in the value it only
+    appears in it.
+    """
+    key = row["key"].lower()
+    value = row["value"].lower()
+    category = row["category"].lower()
+    return float(
+        sum(
+            2 * key.count(term.lower()) + value.count(term.lower())
+            + category.count(term.lower())
+            for term in terms
+        )
+    )
 
 
 class FactStore:
@@ -174,6 +220,20 @@ class FactStore:
         self, query: str, *, category: str | None = None, limit: int = 20
     ) -> list[Fact]:
         """Find facts by keyword, ranked when FTS5 is available."""
+        return [
+            match.fact
+            for match in self.search_ranked(query, category=category, limit=limit)
+        ]
+
+    def search_ranked(
+        self, query: str, *, category: str | None = None, limit: int = 20
+    ) -> list[FactMatch]:
+        """:meth:`search`, keeping the ranking signal instead of discarding it.
+
+        The one place that decides how facts are searched, so retrieval
+        (``harness.retrieval``) inherits this strategy rather than growing a
+        second one that could drift from it.
+        """
         terms = split_terms(query)
         if not terms:
             return []
@@ -188,24 +248,36 @@ class FactStore:
 
     def _search_fts(
         self, terms: list[str], category: str | None, limit: int
-    ) -> list[Fact]:
+    ) -> list[FactMatch]:
         match = " ".join(f'"{t}"' for t in terms)
         sql = (
-            "SELECT f.* FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid "
-            "WHERE facts_fts MATCH ?"
+            "SELECT f.*, bm25(facts_fts) AS rank_score FROM facts_fts "
+            "JOIN facts f ON f.id = facts_fts.rowid WHERE facts_fts MATCH ?"
         )
         params: list[Any] = [match]
         if category is not None:
             sql += " AND f.category = ?"
             params.append(category)
-        sql += " ORDER BY bm25(facts_fts) LIMIT ?"
+        # Ties break on key, never on rowid: two equally good facts must come
+        # back in the same order on every call, or retrieval stops being
+        # reproducible in a test.
+        sql += " ORDER BY rank_score, f.key LIMIT ?"
         params.append(limit)
         rows = self._conn.execute(sql, params).fetchall()
-        return [Fact.model_validate(dict(r)) for r in rows]
+        return [
+            FactMatch(
+                fact=_fact_from(row),
+                # bm25 counts down towards better; negate so every strategy
+                # agrees that a higher score is a better match.
+                score=-float(row["rank_score"]),
+                strategy="fts5",
+            )
+            for row in rows
+        ]
 
     def _search_like(
         self, terms: list[str], category: str | None, limit: int
-    ) -> list[Fact]:
+    ) -> list[FactMatch]:
         clauses: list[str] = []
         params: list[Any] = []
         for term in terms:
@@ -219,7 +291,16 @@ class FactStore:
         if category is not None:
             sql += " AND category = ?"
             params.append(category)
-        sql += " ORDER BY updated_at DESC, key LIMIT ?"
-        params.append(limit)
+        # No LIMIT in SQL: scoring happens in Python, so cutting the rows
+        # first would discard the best match whenever it is not also the most
+        # recent one. Facts are written by hand and never harvested, so the
+        # candidate set stays small enough to sort here.
+        sql += " ORDER BY updated_at DESC, key"
         rows = self._conn.execute(sql, params).fetchall()
-        return [Fact.model_validate(dict(r)) for r in rows]
+        scored = [
+            FactMatch(fact=_fact_from(row), score=_like_score(row, terms), strategy="like")
+            for row in rows
+        ]
+        # Stable sort, so the recency order above survives as the tie-break.
+        scored.sort(key=lambda match: -match.score)
+        return scored[:limit]

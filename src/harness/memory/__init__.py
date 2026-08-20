@@ -1,6 +1,13 @@
 """Working memory: step tracking, fact storage, and run persistence."""
 
-from harness.memory.facts import Fact, FactStore, fts5_available, like_escape, split_terms
+from harness.memory.facts import (
+    Fact,
+    FactMatch,
+    FactStore,
+    fts5_available,
+    like_escape,
+    split_terms,
+)
 from harness.memory.inspect import (
     DEFAULT_RUN_LIMIT,
     damaged_runs,
@@ -21,6 +28,7 @@ from harness.memory.store import MemoryStore, StepRecord, plan_steps_from
 __all__ = [
     "DEFAULT_RUN_LIMIT",
     "Fact",
+    "FactMatch",
     "FactStore",
     "MemoryStore",
     "SchemaVersionError",
