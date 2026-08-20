@@ -172,6 +172,7 @@ async def build_profile(model_path: str | Path | None = None,
         gpus=hw["gpus"],
         storage=hw["storage"],
         runtimes=runtimes,
+        sandbox=hw["sandbox"],
     )
 
     resolved = Path(model_path) if model_path else _model_path_from(runtimes)

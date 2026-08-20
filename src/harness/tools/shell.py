@@ -10,8 +10,9 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
-from harness.core import Risk, ToolResult
+from harness.core import NetworkMode, Risk, ToolResult
 from harness.tools._security import default_classifier
 from harness.tools.compression import compress_command_output, detect_kind
 
@@ -24,16 +25,45 @@ def run_command(
     command: str,
     timeout: float = 30.0,
     confirm_callback: ConfirmCallback | None = None,
+    network: NetworkMode | str = NetworkMode.ISOLATED,
 ) -> ToolResult:
     """Execute a shell command with security classification and timeout.
 
     Risk.DENY returns denied result without executing. Risk.CONFIRM consults
     the approval callback; when no callback was provided, DENY. Risk.ALLOW
     executes immediately.
+
+    The sandbox is fail-closed: an untrusted (CONFIRM) command is never
+    executed without bubblewrap. A trusted (ALLOW) read-only command is the
+    one documented exception — it may run unsandboxed when bwrap is absent,
+    and the result records ``network="unsandboxed"`` so that gap is auditable
+    rather than silent.
+
+    The default ``network`` mode isolates the network namespace. Because
+    :class:`NetworkMode` is a ``StrEnum``, a decoded tool argument arrives as
+    a plain ``str``; it is coerced at this boundary and an unrecognized value
+    is denied rather than treated as "no isolation".
+    ``NetworkMode.ALLOWED`` is the explicit, *approved* opt-out: it is only
+    honored when an approval callback is present and grants network access
+    specifically — otherwise the command falls back to ``ISOLATED`` so network
+    access is never granted without an approval, never silently.
     """
     started = time.perf_counter()
     workspace = workspace.resolve()
     cwd = str(workspace)
+
+    requested_network = _resolve_network(network)
+    if requested_network is None:
+        return ToolResult(
+            tool="run_command",
+            ok=False,
+            error_kind="denied",
+            content=(
+                f"Unknown network mode {network!r}: expected one of "
+                f"{', '.join(mode.value for mode in NetworkMode)}"
+            ),
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
 
     risk = default_classifier(command, workspace)
 
@@ -68,10 +98,43 @@ def run_command(
                 duration_ms=(time.perf_counter() - started) * 1000.0,
             )
 
+    # Network access is a separate privilege from command risk. ALLOWED is the
+    # explicit opt-out, but it is only honored when an approval mechanism is
+    # present and grants it — otherwise the command runs isolated. Network
+    # access is never granted without an approval, and the resulting mode is
+    # auditable on the ToolResult.
+    effective_network = requested_network
+    if effective_network is NetworkMode.ALLOWED and (
+        confirm_callback is None
+        or not confirm_callback(command, "network access requested")
+    ):
+        effective_network = NetworkMode.ISOLATED
+
+    sandbox = _sandbox_argv(workspace, command, network=effective_network)
+    if sandbox is None:
+        # Fail closed: an untrusted command — even one a human approved — is
+        # never executed without the sandbox. There is no fallback for it.
+        if risk is Risk.CONFIRM:
+            return ToolResult(
+                tool="run_command",
+                ok=False,
+                error_kind="denied",
+                content=(
+                    "sandbox unavailable: bubblewrap (bwrap) is required to "
+                    f"execute an untrusted command and was not found: {command}"
+                ),
+                duration_ms=(time.perf_counter() - started) * 1000.0,
+            )
+        # Trusted read-only commands are the documented unsandboxed fallback.
+        argv: list[str] = ["/bin/sh", "-c", command]
+        network_mode: NetworkMode | Literal["unsandboxed"] = "unsandboxed"
+    else:
+        argv = sandbox
+        network_mode = effective_network
+
     try:
-        sandboxed = _sandbox_argv(workspace, command)
         proc = subprocess.Popen(
-            sandboxed,
+            argv,
             shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -105,6 +168,9 @@ def run_command(
             error_kind="timeout",
             content=f"Command exceeded timeout of {timeout}s",
             duration_ms=(time.perf_counter() - started) * 1000.0,
+            # The command already ran under this policy; a timeout must not
+            # erase which one, or persisted results cannot be audited.
+            network=network_mode,
         )
 
     kind = detect_kind(command)
@@ -124,6 +190,7 @@ def run_command(
         duration_ms=(time.perf_counter() - started) * 1000.0,
         truncated=compressed.truncated,
         original_bytes=compressed.original_bytes,
+        network=network_mode,
     )
 
 
@@ -144,11 +211,41 @@ def _sandbox_path(workspace: Path) -> str:
     return ":".join(str(entry) for entry in entries)
 
 
-def _sandbox_argv(workspace: Path, command: str) -> list[str]:
-    """Wrap a command in bubblewrap when available, otherwise rely on the gate."""
+def _resolve_network(network: NetworkMode | str) -> NetworkMode | None:
+    """Coerce a network policy at the boundary; ``None`` when unrecognized.
+
+    :class:`NetworkMode` is a ``StrEnum``, so an identity check against a
+    decoded JSON argument such as ``"isolated"`` would be false and would
+    silently drop the isolation it asks for. Unknown values return ``None``
+    so the caller can deny them instead of guessing.
+    """
+    if isinstance(network, NetworkMode):
+        return network
+    try:
+        return NetworkMode(network)
+    except ValueError:
+        return None
+
+
+def _sandbox_argv(
+    workspace: Path,
+    command: str,
+    *,
+    network: NetworkMode | str = NetworkMode.ISOLATED,
+) -> list[str] | None:
+    """Wrap a command in bubblewrap, or return ``None`` when bwrap is absent.
+
+    Returning ``None`` (rather than a bare ``/bin/sh -c`` fallback) makes the
+    absence fail-closed at the caller: :func:`run_command` decides whether
+    the command's risk class may run unsandboxed, never this function. The
+    default ``network`` mode adds ``--unshare-net`` so an approved command
+    still gets an isolated network namespace; ``NetworkMode.ALLOWED`` omits
+    it so the opt-out is a visible, auditable difference in the argv. Every
+    other value — including an unrecognized one — is isolated.
+    """
     bwrap = shutil.which("bwrap")
     if bwrap is None:
-        return ["/bin/sh", "-c", command]
+        return None
 
     argv = [
         bwrap,
@@ -157,6 +254,10 @@ def _sandbox_argv(workspace: Path, command: str) -> list[str]:
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",
+    ]
+    if _resolve_network(network) is not NetworkMode.ALLOWED:
+        argv.append("--unshare-net")
+    argv.extend((
         "--proc",
         "/proc",
         "--dev",
@@ -166,19 +267,8 @@ def _sandbox_argv(workspace: Path, command: str) -> list[str]:
         "--ro-bind",
         "/usr",
         "/usr",
-        "--symlink",
-        "usr/bin",
-        "/bin",
-        "--symlink",
-        "usr/bin",
-        "/sbin",
-        "--symlink",
-        "usr/lib",
-        "/lib",
-        "--symlink",
-        "usr/lib",
-        "/lib64",
-    ]
+    ))
+    _append_toplevel_links(argv)
     for source in (Path("/etc/ld.so.cache"), Path("/etc/localtime"), Path("/etc/ssl")):
         if source.exists():
             _append_parent_dirs(argv, source.parent)
@@ -219,6 +309,25 @@ def _sandbox_argv(workspace: Path, command: str) -> list[str]:
         )
     )
     return argv
+
+
+def _append_toplevel_links(argv: list[str]) -> None:
+    """Reproduce the host's top-level directory layout inside the sandbox.
+
+    ``/bin``, ``/sbin``, ``/lib`` and ``/lib64`` differ between distributions:
+    Arch points every one of them at ``usr/lib`` or ``usr/bin``, Debian and
+    Ubuntu point ``/sbin`` at ``usr/sbin`` and ``/lib64`` at ``usr/lib64``.
+    Hard-coding one distribution's layout hides the dynamic loader from the
+    sandbox, and ``execvp`` then reports a missing file for a binary that
+    exists. Mirroring what the host actually has keeps this portable.
+    """
+    for name in ("/bin", "/sbin", "/lib", "/lib64", "/lib32"):
+        path = Path(name)
+        if path.is_symlink():
+            argv.extend(("--symlink", os.readlink(path), name))
+        elif path.is_dir():
+            # A real directory rather than a merged-usr symlink: bind it.
+            argv.extend(("--ro-bind", name, name))
 
 
 def _append_parent_dirs(argv: list[str], path: Path) -> None:
