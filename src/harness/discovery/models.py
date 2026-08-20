@@ -64,6 +64,22 @@ class RuntimeInfo(BaseModel):
     server_argv: list[str] = Field(default_factory=list)
 
 
+class SandboxInfo(BaseModel):
+    """Whether the shell sandbox is available.
+
+    The shell tool is fail-closed: an untrusted command is never executed
+    without bubblewrap. ``available`` being False is therefore a hard
+    readiness gap for any agent run that may issue untrusted commands, not a
+    soft warning — the harness surfaces it so it is fixed before a run, not
+    discovered mid-run as a stream of denied commands.
+    """
+
+    available: bool = False
+    bwrap_path: str | None = None
+    network_isolated_by_default: bool = True
+    """False only if the default network mode was changed away from isolation."""
+
+
 class ModelInfo(BaseModel):
     """Facts read from the GGUF file itself, not from its filename."""
 
@@ -136,6 +152,7 @@ class HardwareProfile(BaseModel):
     gpus: list[GpuInfo] = Field(default_factory=list)
     storage: list[StorageInfo] = Field(default_factory=list)
     runtimes: list[RuntimeInfo] = Field(default_factory=list)
+    sandbox: SandboxInfo = Field(default_factory=SandboxInfo)
     model: ModelInfo | None = None
     recommended: Recommendations = Field(default_factory=Recommendations)
 

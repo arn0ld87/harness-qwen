@@ -79,6 +79,12 @@ def _render_hardware(p: HardwareProfile) -> None:
         t.add_row("GPU", f"{UNKNOWN} [dim](no vendor tool found — CPU inference)[/dim]")
 
     t.add_row("OS", f"{p.os_release or UNKNOWN}   [dim]{p.kernel or ''}[/dim]")
+
+    if p.sandbox.available:
+        net = "isolated" if p.sandbox.network_isolated_by_default else "allowed"
+        t.add_row("Sandbox", f"bwrap  [dim]network {net} by default[/dim]")
+    else:
+        t.add_row("Sandbox", "[red]bwrap missing[/red]")
     console.print(t)
 
 
@@ -181,6 +187,14 @@ def _render_recommendations(p: HardwareProfile) -> None:
 
 def _render_warnings(p: HardwareProfile) -> None:
     warnings: list[str] = []
+
+    if not p.sandbox.available:
+        warnings.append(
+            "Bubblewrap (bwrap) not found. The shell sandbox is fail-closed: "
+            "without it, untrusted commands are denied rather than run "
+            "unsandboxed. Install bwrap before any agent run that may issue "
+            "such commands."
+        )
 
     if p.memory.swap_is_zram and p.memory.swap_used_bytes > GIB:
         warnings.append(

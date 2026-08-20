@@ -191,6 +191,10 @@ class ToolResult(BaseModel):
     error_kind: str | None = None
     """Set when ok is False: not_found, timeout, denied, invalid_arguments,
     execution_failed, permission_denied."""
+    network: str | None = None
+    """Network policy the command ran under (``isolated``/``allowed``), or
+    ``unsandboxed`` for the trusted read-only fallback when bubblewrap is
+    absent. ``None`` means the command did not execute (denied/timeout)."""
 
 
 class ToolError(RuntimeError):

@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from harness.discovery.models import CpuInfo, GpuInfo, MemoryInfo, StorageInfo
+from harness.discovery.models import CpuInfo, GpuInfo, MemoryInfo, SandboxInfo, StorageInfo
 
 _MEMINFO = Path("/proc/meminfo")
 _CPUINFO = Path("/proc/cpuinfo")
@@ -171,7 +171,24 @@ def probe_hardware(storage_paths: list[str] | None = None) -> dict:
         "memory": probe_memory(),
         "gpus": probe_gpus(),
         "storage": probe_storage(storage_paths),
+        "sandbox": probe_sandbox(),
     }
+
+
+def probe_sandbox() -> SandboxInfo:
+    """Detect the bubblewrap sandbox the shell tool depends on.
+
+    Bubblewrap is what makes an untrusted shell command safe to run: without
+    it the shell tool refuses such commands outright (fail-closed). Its
+    absence is a readiness gap for any agent run, so it is probed here rather
+    than discovered only when a command is first denied.
+    """
+    bwrap = shutil.which("bwrap")
+    return SandboxInfo(
+        available=bwrap is not None,
+        bwrap_path=bwrap,
+        network_isolated_by_default=True,
+    )
 
 
 def _os_release_name() -> str | None:

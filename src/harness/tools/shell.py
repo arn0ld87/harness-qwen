@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import os
 import shutil
 import signal
@@ -19,17 +20,39 @@ ConfirmCallback = Callable[[str, str], bool]
 """Maps (command, risk_reason) to approval: True to run, False to deny."""
 
 
+class NetworkMode(enum.StrEnum):
+    """Network policy a shell command runs under.
+
+    ``ISOLATED`` is the default: the sandbox gets its own network namespace
+    (``--unshare-net``) so an approved command still cannot reach the host
+    network. ``ALLOWED`` is the explicit, auditable opt-out for commands a
+    human approved knowing they need network access — it runs in the sandbox
+    but shares the host network namespace.
+    """
+
+    ISOLATED = "isolated"
+    ALLOWED = "allowed"
+
+
 def run_command(
     workspace: Path,
     command: str,
     timeout: float = 30.0,
     confirm_callback: ConfirmCallback | None = None,
+    network: NetworkMode = NetworkMode.ISOLATED,
 ) -> ToolResult:
     """Execute a shell command with security classification and timeout.
 
     Risk.DENY returns denied result without executing. Risk.CONFIRM consults
     the approval callback; when no callback was provided, DENY. Risk.ALLOW
     executes immediately.
+
+    The sandbox is fail-closed: an untrusted (CONFIRM) command is never
+    executed without bubblewrap. A trusted (ALLOW) read-only command is the
+    one documented exception — it may run unsandboxed when bwrap is absent,
+    and the result records ``network="unsandboxed"`` so that gap is auditable
+    rather than silent. The default ``network`` mode isolates the network
+    namespace; ``NetworkMode.ALLOWED`` is the explicit, auditable opt-out.
     """
     started = time.perf_counter()
     workspace = workspace.resolve()
@@ -68,10 +91,31 @@ def run_command(
                 duration_ms=(time.perf_counter() - started) * 1000.0,
             )
 
+    sandbox = _sandbox_argv(workspace, command, network=network)
+    if sandbox is None:
+        # Fail closed: an untrusted command — even one a human approved — is
+        # never executed without the sandbox. There is no fallback for it.
+        if risk is Risk.CONFIRM:
+            return ToolResult(
+                tool="run_command",
+                ok=False,
+                error_kind="denied",
+                content=(
+                    "sandbox unavailable: bubblewrap (bwrap) is required to "
+                    f"execute an untrusted command and was not found: {command}"
+                ),
+                duration_ms=(time.perf_counter() - started) * 1000.0,
+            )
+        # Trusted read-only commands are the documented unsandboxed fallback.
+        argv: list[str] = ["/bin/sh", "-c", command]
+        network_mode = "unsandboxed"
+    else:
+        argv = sandbox
+        network_mode = str(network)
+
     try:
-        sandboxed = _sandbox_argv(workspace, command)
         proc = subprocess.Popen(
-            sandboxed,
+            argv,
             shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -124,6 +168,7 @@ def run_command(
         duration_ms=(time.perf_counter() - started) * 1000.0,
         truncated=compressed.truncated,
         original_bytes=compressed.original_bytes,
+        network=network_mode,
     )
 
 
@@ -144,11 +189,21 @@ def _sandbox_path(workspace: Path) -> str:
     return ":".join(str(entry) for entry in entries)
 
 
-def _sandbox_argv(workspace: Path, command: str) -> list[str]:
-    """Wrap a command in bubblewrap when available, otherwise rely on the gate."""
+def _sandbox_argv(
+    workspace: Path, command: str, *, network: NetworkMode = NetworkMode.ISOLATED
+) -> list[str] | None:
+    """Wrap a command in bubblewrap, or return ``None`` when bwrap is absent.
+
+    Returning ``None`` (rather than a bare ``/bin/sh -c`` fallback) makes the
+    absence fail-closed at the caller: :func:`run_command` decides whether
+    the command's risk class may run unsandboxed, never this function. The
+    default ``network`` mode adds ``--unshare-net`` so an approved command
+    still gets an isolated network namespace; ``NetworkMode.ALLOWED`` omits
+    it so the opt-out is a visible, auditable difference in the argv.
+    """
     bwrap = shutil.which("bwrap")
     if bwrap is None:
-        return ["/bin/sh", "-c", command]
+        return None
 
     argv = [
         bwrap,
@@ -157,6 +212,10 @@ def _sandbox_argv(workspace: Path, command: str) -> list[str]:
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",
+    ]
+    if network is NetworkMode.ISOLATED:
+        argv.append("--unshare-net")
+    argv.extend((
         "--proc",
         "/proc",
         "--dev",
@@ -178,7 +237,7 @@ def _sandbox_argv(workspace: Path, command: str) -> list[str]:
         "--symlink",
         "usr/lib",
         "/lib64",
-    ]
+    ))
     for source in (Path("/etc/ld.so.cache"), Path("/etc/localtime"), Path("/etc/ssl")):
         if source.exists():
             _append_parent_dirs(argv, source.parent)
