@@ -38,7 +38,12 @@ from harness.models.wire import (
     parse_usage,
 )
 
-DEFAULT_BASE_URL: Final = "http://127.0.0.1:18080"
+DEFAULT_HOST: Final = "127.0.0.1"
+DEFAULT_PORT: Final = 18080
+DEFAULT_BASE_URL: Final = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+"""Derived, not typed out twice: the config layer needs the host and the port
+separately to launch a server, and a second literal would drift from this one
+the first time either is changed."""
 
 
 class LlamaCppProvider:

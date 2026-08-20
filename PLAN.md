@@ -46,7 +46,22 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
 ### Phase B — v0.3 Runtime & CLI
 - [ ] #10 runtime/ Supervisor (Start/Stop/Health, PID, Attach, Crash, stdout secret-safe)
 - [ ] #11 Portbesitz, stale/foreign, Startvalidierung (auf #10)
-- [ ] #12 config/ Schicht (Defaults<File<Env<CLI, redigiert, Hardware-Profil, typisiert)
+- [x] #12 config/ Schicht (Defaults<File<Env<CLI, redigiert, Hardware-Profil, typisiert)
+
+#### Sub-Slice 12.1 — Typisierte Konfiguration mit Provenance
+1. `config/schema.py`: `RuntimeConfig`, `ModelConfig`, `SandboxConfig`,
+   `HarnessConfig`. Budget bleibt `core.Budget` — kein zweites Modell fuer
+   dieselben Werte.
+2. Defaults referenzieren die bestehenden Definitionen (`budget.py`,
+   `llamacpp.py`), statt Zahlen zu duplizieren. Genau ein Eigentuemer pro Wert.
+3. `config/resolve.py`: Defaults < Datei < Env (`HARNESS_*`) < CLI, jedes Feld
+   mit Herkunft. `ResolvedConfig.origins` traegt den dotted path.
+4. Redaktion beim Ausgeben ueber `telemetry.redact`, nicht ueber eine zweite
+   Musterliste.
+5. Hardware-Profil: `config/hardware-profile.json` wird gelesen, wenn
+   vorhanden; fehlt es, laeuft alles weiter (kein Hard-Block fremder Systeme).
+6. Tests: Prioritaetskette, Typvalidierung, Redaktion, Provenance, fehlendes
+   Profil, kaputte Datei.
 - [ ] #13 `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
 - [ ] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
 - [ ] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)

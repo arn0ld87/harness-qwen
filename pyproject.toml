@@ -51,7 +51,7 @@ addopts = "-m 'not local_llm' --strict-markers -ra"
 # the llama.cpp client. Set just below the measured baseline on 2026-08-20 —
 # high enough to catch a regression, not so high that the gate ships red.
 [tool.coverage_gate]
-total = 65.0
+total = 66.0
 
 [tool.coverage_gate.modules]
 agent = 88.0       # measured 90.9
@@ -60,6 +60,7 @@ memory = 75.0      # measured 77.9
 protocol = 65.0    # measured 68.7
 security = 50.0    # measured 53.5 — lowest of the five and the one to raise
                    # first: rules.py and shellsplit.py sit near 31% (#32).
+config = 95.0      # measured 97.5 — new, small and fully exercised
 tools = 40.0       # measured 44.2, dragged down by filesystem.py and git.py
                    # having no unit tests yet — see the file floor below.
 

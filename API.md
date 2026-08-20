@@ -114,6 +114,50 @@ output, so nothing is lost — it simply is not paid for on every later step.
 absent from `to_openai_tool()` — the declaration block sits in the cached
 prefix, and this is harness bookkeeping the model never needs to read.
 
+### Configuration layer
+
+```python
+class Origin(StrEnum):          # increasing priority
+    DEFAULT = "default"         # the value the owning subsystem defines
+    PROFILE = "profile"         # measured recommendation for this machine
+    FILE    = "file"            # harness.json / .harness.json
+    ENV     = "env"             # HARNESS_SECTION_FIELD
+    CLI     = "cli"             # command-line override
+
+class HarnessConfig(BaseModel):
+    runtime: RuntimeConfig
+    model: ModelConfig
+    context: ContextConfig
+    sandbox: SandboxConfig
+    budget: Budget              # core.Budget itself, not a copy of it
+    workspace: Path
+    database: Path
+
+class ResolvedConfig:
+    config: HarnessConfig
+    hardware_profile: dict | None
+    def origin_of(self, path: str) -> Origin: ...    # dotted path
+    def source_of(self, path: str) -> str: ...       # file, variable or flag
+    def as_dict(self, *, reveal_secrets: bool = False) -> dict: ...
+    def render(self) -> str: ...
+
+def load_config(...) -> ResolvedConfig: ...
+def resolve_config(...) -> ResolvedConfig: ...
+```
+
+Every default *points at* the definition that already owns the value —
+`Budget()`, `DEFAULT_CONTEXT_WINDOW`, `DEFAULT_BASE_URL` — rather than
+restating it. Two owners of one number is how a tuned soft ceiling silently
+stops applying.
+
+`PROFILE` sits above the built-in defaults because a measurement of this
+machine beats a number chosen for no machine; `null` in the profile's
+`recommended` block means the benchmark has not answered yet and is skipped
+rather than applied.
+
+Unknown keys are refused (`extra="forbid"`): a typo that is silently ignored
+looks exactly like a setting that took effect.
+
 ### Protocol layer
 
 ```python

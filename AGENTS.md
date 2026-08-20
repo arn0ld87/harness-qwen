@@ -19,6 +19,7 @@ uv run harness doctor            # Probe hardware and runtime
 |--------|---|
 | `src/harness/discovery/` | Hardware, runtime, and model probing → `hardware-profile.json` |
 | `src/harness/models/` | `ModelProvider` interface, `LlamaCppProvider`, `FakeProvider` |
+| `src/harness/config/` | Typed configuration: defaults < profile < file < env < CLI, with provenance |
 | `src/harness/runtime/` | Planned; not implemented |
 | `src/harness/context/` | `PromptAssembler`, `TokenBudget`, `CacheEconomics`, compressors |
 | `src/harness/agent/` | `AgentLoop`, roles, `Planner`, `TaskState`, `RetryPolicy` |
@@ -65,13 +66,14 @@ client.
 | Package | Floor | Measured 2026-08-20 |
 |---|---|---|
 | `agent` | 88% | 90.9% |
+| `config` | 95% | 97.5% |
 | `context` | 80% | 83.2% |
 | `memory` | 75% | 77.9% |
 | `protocol` | 65% | 68.7% |
 | `security` | 50% | 53.5% |
 | `tools` | 40% | 44.2% |
 | `tools/shell.py` (file) | 85% | 90.6% |
-| total | 65% | 67.1% |
+| total | 66% | 68.7% |
 
 `shell.py` carries its own floor because a package average hides its riskiest
 member: `tools` is held down by `filesystem.py` and `git.py` having no unit
