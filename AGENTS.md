@@ -31,6 +31,7 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/security/` | Command classification (allow/confirm/deny) and approval gate |
 | `src/harness/telemetry/` | Structured run log (no CoT, no secrets) |
 | `src/harness/benchmark/` | Planned; not implemented |
+| `src/harness/session.py` | Assembles a runnable `AgentLoop` from configuration |
 | `src/harness/cli.py` | Typer entry point |
 
 ## Code style

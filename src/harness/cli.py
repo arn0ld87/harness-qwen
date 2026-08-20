@@ -19,6 +19,7 @@ from rich.table import Table
 
 from harness import __version__
 from harness.cli_inspect import config_app, memory_app
+from harness.cli_run import run as run_command
 from harness.config import ConfigError, load_config
 from harness.diagnostics import Diagnosis, Severity, diagnose
 from harness.discovery import build_profile, save_profile
@@ -361,6 +362,9 @@ def model_info(
     if (state := meta.recurrent_state_bytes()) is not None:
         console.print(f"\n[dim]recurrent state: {state / MIB:,.0f} MiB, "
                       f"independent of context length[/dim]")
+
+
+app.command("run")(run_command)
 
 
 @app.command()

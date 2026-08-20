@@ -89,7 +89,22 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    vorhanden; fehlt es, laeuft alles weiter (kein Hard-Block fremder Systeme).
 6. Tests: Prioritaetskette, Typvalidierung, Redaktion, Provenance, fehlendes
    Profil, kaputte Datei.
-- [ ] #13 `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
+- [x] #13 `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
+
+#### Sub-Slice 13.1 — Vom Baukasten zum laufenden Agenten
+1. `tools/builtin.py`: die acht Tools bekommen ToolSpecs mit Risk **und**
+   SideEffect. Die Funktionen gab es, die Deklaration fehlte — kein Agent
+   konnte sie aufrufen.
+2. `session.py`: eine Stelle weiss, wie die acht Komponenten zusammengehen.
+   `run` und `chat` unterscheiden sich darin, wie sie mit einem Menschen
+   reden, nicht darin, was sie zusammenbauen.
+3. `cli_run.py`: Exit-Codes je Stop-Grund, JSON, Resume, Overrides ueber
+   dieselbe Config-Aufloesung wie alles andere.
+4. `--approve-confirmable`: ohne Genehmigungsweg kann ein unbeaufsichtigter
+   Lauf nichts tun, was der Classifier nicht ohnehin erlaubt. Explizit,
+   protokolliert, DENY bleibt DENY.
+5. Systemprompt geschaerft, nachdem das 35B-Modell im echten Lauf einen Plan
+   statt einer Aenderung lieferte.
 - [ ] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
 - [x] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
 
