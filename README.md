@@ -132,6 +132,15 @@ The inspection commands (`config show`, `memory inspect`) take `--json` for
 automation, redact secrets in either mode, and open the memory database
 read-only — looking at a store never migrates or repairs it.
 
+`memory inspect` reports the store's schema version alongside its runs. A
+database written by an older harness is upgraded on the next write, one version
+step at a time and each step inside a single transaction, so the file is never
+left between two versions; a database written by a *newer* harness is refused
+rather than read. The harness does not back up for you: before upgrading a
+store whose resume points matter, copy `.harness/memory.sqlite` with its `-wal`
+and `-shm` siblings, or run `sqlite3 memory.sqlite ".backup backup.sqlite"`
+while nothing is writing. Recovery is restoring that copy.
+
 `run` supports `--resume`, `--approve-confirmable`, budget overrides and
 config-file overrides. `chat` provides `/status`, `/context`, `/usage`,
 `/help` and `/exit` session commands. `harness benchmark` runs a suite

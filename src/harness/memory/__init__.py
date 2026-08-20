@@ -15,6 +15,8 @@ from harness.memory.inspect import (
     open_for_inspection,
 )
 from harness.memory.migrations import (
+    SCHEMA_VERSION,
+    MigrationError,
     SchemaVersionError,
     StoreError,
     UnknownRunError,
@@ -22,15 +24,18 @@ from harness.memory.migrations import (
     configure,
     ensure_schema,
     object_exists,
+    schema_version,
 )
 from harness.memory.store import MemoryStore, StepRecord, plan_steps_from
 
 __all__ = [
     "DEFAULT_RUN_LIMIT",
+    "SCHEMA_VERSION",
     "Fact",
     "FactMatch",
     "FactStore",
     "MemoryStore",
+    "MigrationError",
     "SchemaVersionError",
     "StepRecord",
     "StoreError",
@@ -45,5 +50,6 @@ __all__ = [
     "object_exists",
     "open_for_inspection",
     "plan_steps_from",
+    "schema_version",
     "split_terms",
 ]

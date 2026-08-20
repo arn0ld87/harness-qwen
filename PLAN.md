@@ -10,6 +10,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 - v0.3 Runtime & CLI (#10–#16): COMPLETE
 - v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17, #18, #19 und #22 abgeschlossen, #20–#21 offen (brauchen das echte Modell)
 - #27 `harness benchmark` CLI: abgeschlossen (siehe Phase D)
+- v1.0 Release Readiness (#23–#26, #28–#30): PARTIAL — #25 abgeschlossen (siehe Phase E)
 
 ## Ausfuehrungsprotokoll
 
@@ -153,9 +154,30 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
   - Tests: `tests/test_cli_benchmark.py` (FakeProvider/Stub-Runner),
     `tests/test_benchmark_report.py` (`render_comparison`).
 
+### Phase E — v1.0 Release Readiness
+- [x] #25 SQLite-Schema-Versionierung und Migrationstests
+  - `memory/migrations.py`: jeder Versionsschritt in einer Transaktion
+    (`_atomic`), inklusive `PRAGMA user_version` — SQLite rollt DDL mit
+    zurück, also gibt es keinen Halbzustand zwischen zwei Versionen. Ein
+    fehlgeschlagener Schritt wirft `MigrationError` und lässt die Datenbank
+    auf der Ausgangsversion stehen.
+  - Auch die Neuanlage läuft transaktional: `executescript` würde vorher
+    committen, deshalb `_statements(schema.sql)` einzeln über `execute`.
+  - `schema_version(conn)` als gemeinsamer Leser; `MigrationError`,
+    `SCHEMA_VERSION` und `schema_version` aus `harness.memory` exportiert.
+  - Fixture `tests/fixtures/memory/schema_v1.sql` — echte v1-Datenbank mit
+    Run, Step, TaskState und Fact; `tests/test_memory_migrations.py` (7)
+    prüft Migration mit erhaltenen Zeilen, Idempotenz, Rollback, Ablehnung
+    neuerer Versionen und fehlender Kettenglieder.
+  - Backup-/Recovery-Hinweis in README und Modul-Docstring; `memory inspect`
+    zeigt die Schema-Version bereits (`schema v{n}`).
+- [ ] #23 Threat Model und Security-/Secret-Handling-Audit
+- [ ] #24 End-to-End-Smoke-Test gegen lokalen llama-server
+- [ ] #26 Packaging, Versionierung, Changelog, Release-Automation
+
 ## Naechste Arbeiten
 
 Der naechste Plan ersetzt diesen und definiert die Arbeit an den verbleibenden
-offenen Issues (#20–#22, #23–#26, #28–#30) sowie neuen Themen. Bis dahin:
+offenen Issues (#20–#21, #23, #24, #26, #28–#30) sowie neuen Themen. Bis dahin:
 `harness run`, `harness chat` und `harness benchmark` sind der aktuelle Stand,
 auf dem alles Weitere aufbaut.

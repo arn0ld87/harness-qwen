@@ -26,7 +26,7 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/agent/` | `AgentLoop`, roles, `Planner`, `TaskState`, `RetryPolicy` |
 | `src/harness/protocol/` | `ActionCodec` (native tool_calls or constrained JSON), schemas |
 | `src/harness/tools/` | Registry, typed tools, shell/filesystem/git exec, `ToolResult` compression, `builtin.py` specs, `retrieval_tool.py` (the `retrieve_facts` tool), internal `_security.py` helpers |
-| `src/harness/memory/` | SQLite: task state, run journal, persistent facts (`facts.py`), read-only inspect (`inspect.py`), schema migrations (`migrations.py`) |
+| `src/harness/memory/` | SQLite: task state, run journal, persistent facts (`facts.py`), read-only inspect (`inspect.py`), versioned schema and transactional migrations (`migrations.py`) |
 | `src/harness/retrieval/` | `Retriever` interface, `SqliteFtsRetriever` over persistent facts, wired into the loop as the `retrieve_facts` tool and the `RetrieveAgain` compression rung |
 | `src/harness/security/` | Command classification (allow/confirm/deny), shell splitting, approval gate |
 | `src/harness/telemetry/` | Structured run log (no CoT, no secrets), redaction helpers |
@@ -77,7 +77,7 @@ client.
 | `config` | 95% | 98.3% |
 | `diagnostics` | 85% | 86.5% |
 | `context` | 80% | 83.5% |
-| `memory` | 75% | 91.9% |
+| `memory` | 75% | 92.8% |
 | `protocol` | 65% | 68.7% |
 | `retrieval` | 97% | 100.0% |
 | `runtime` | 90% | 93.2% |
@@ -86,7 +86,7 @@ client.
 | `security/classifier.py` (file) | 97% | 99.5% |
 | `security/shellsplit.py` (file) | 100% | 100% |
 | `tools/shell.py` (file) | 85% | 91.5% |
-| total | 66% | 82.0% |
+| total | 66% | 82.1% |
 
 Three files carry their own floor because a package average hides its riskiest
 member. `tools` is held down by `filesystem.py` and `git.py` having no unit

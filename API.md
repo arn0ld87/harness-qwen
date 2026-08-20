@@ -642,6 +642,41 @@ the violation probe to verify the run catches the bug it exists for.
 
 ---
 
+## `harness.memory`
+
+```python
+SCHEMA_VERSION: int
+
+def schema_version(conn: sqlite3.Connection) -> int: ...
+def ensure_schema(conn: sqlite3.Connection, label: str = "database") -> int: ...
+def check_schema(conn: sqlite3.Connection, label: str = "database") -> int: ...
+
+class StoreError(RuntimeError): ...
+class SchemaVersionError(StoreError): ...
+class MigrationError(StoreError): ...
+class UnknownRunError(StoreError): ...
+```
+
+Two doors into a database, and they differ in what they are allowed to do to
+it. `ensure_schema` is the writer's door: it creates a fresh schema or walks an
+older one forward one version at a time. `check_schema` is the reader's door,
+used by `memory inspect` — it asserts the version and never writes, because
+reading a database is not consent to rewrite it.
+
+Each version step runs inside one transaction, `PRAGMA user_version` included.
+SQLite rolls DDL back with the rest, so a step that fails leaves the database
+at the version it started from and raises `MigrationError`; there is no state
+between two versions for anyone to repair by hand. A database at a version
+*above* `SCHEMA_VERSION` raises `SchemaVersionError` at both doors rather than
+being opened on the assumption that the extra columns will not matter.
+
+The upgrade path is a chain, not a lookup: `MIGRATIONS` holds one callable per
+version step and a missing link stops the upgrade instead of skipping it. See
+`tests/fixtures/memory/schema_v1.sql` for the predecessor schema the tests
+migrate forward.
+
+---
+
 ## Runtime HTTP surface
 
 Endpoints the harness uses on `llama-server`:

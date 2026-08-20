@@ -5,20 +5,29 @@ a database on disk may be used. A schema written by an older harness is
 upgraded; one written by a newer harness is refused. Silently reading either
 would corrupt the resume point, which is the one thing this subsystem exists
 to protect.
+
+Every version step runs inside one transaction, so a database is at exactly
+one version at all times — never at the half-applied state between two, which
+is the only failure nobody can repair by hand. That said, the harness will not
+back up your database for you: before upgrading a store you care about, copy
+``.harness/memory.sqlite`` together with its ``-wal`` and ``-shm`` siblings, or
+run ``sqlite3 memory.sqlite ".backup backup.sqlite"`` while nothing is writing.
+Recovery is then restoring the copy and running the older harness again.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA_VERSION = 2
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
-# Upgrades from the keyed version to the next one. Empty while SCHEMA_VERSION
-# is 1; the mechanism ships now so that version 2 becomes a data migration
-# rather than a data loss.
+# Upgrades from the keyed version to the next one. One entry per version step,
+# no skipping: a database at version 1 walks 1 → 2 → 3 rather than jumping, so
+# each step only ever sees the shape the step before it produced.
 def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -42,8 +51,35 @@ class SchemaVersionError(StoreError):
     """The database on disk was written by a different schema version."""
 
 
+class MigrationError(StoreError):
+    """An upgrade step failed; the database stayed at the version before it."""
+
+
 class UnknownRunError(StoreError):
     """An operation referenced a run_id that has no row in ``runs``."""
+
+
+def schema_version(conn: sqlite3.Connection) -> int:
+    """The version recorded in the file header; 0 means none was written."""
+    return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
+@contextmanager
+def _atomic(conn: sqlite3.Connection, what: str, label: str) -> Generator[None]:
+    """Run one schema change as a unit, or leave the database as it was.
+
+    SQLite rolls back DDL, and ``user_version`` lives in the file header and is
+    rolled back with it — so a failure here cannot leave tables from a version
+    the header does not claim. Python's driver only opens transactions
+    implicitly for DML, hence the explicit ``BEGIN``.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except Exception as exc:
+        conn.rollback()
+        raise MigrationError(f"{label}: {what} failed and was rolled back: {exc}") from exc
+    conn.commit()
 
 
 def check_schema(conn: sqlite3.Connection, label: str = "database") -> int:
@@ -58,7 +94,7 @@ def check_schema(conn: sqlite3.Connection, label: str = "database") -> int:
         SchemaVersionError: The database is at another version, or carries no
             harness schema at all.
     """
-    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    version = schema_version(conn)
     if version == SCHEMA_VERSION:
         return version
     if version == 0 and not object_exists(conn, "table", "runs"):
@@ -98,8 +134,10 @@ def ensure_schema(conn: sqlite3.Connection, label: str = "database") -> int:
         SchemaVersionError: The database is newer than this harness, carries
             tables but no recorded version, or sits at a version with no
             registered upgrade.
+        MigrationError: An upgrade step failed. It was rolled back, so the
+            database is still at the version it had before the attempt.
     """
-    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    version = schema_version(conn)
 
     if version == 0:
         if object_exists(conn, "table", "runs"):
@@ -109,8 +147,13 @@ def ensure_schema(conn: sqlite3.Connection, label: str = "database") -> int:
                 "removed by hand"
             )
         script = SCHEMA_PATH.read_text(encoding="utf-8")
-        conn.executescript(f"{script}\nPRAGMA user_version = {SCHEMA_VERSION};")
-        conn.commit()
+        with _atomic(conn, "creating the schema", label):
+            # executescript would commit first and run outside the transaction;
+            # a partial schema with no version is the state _atomic exists to
+            # rule out, so the statements go through execute() one at a time.
+            for statement in _statements(script):
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return SCHEMA_VERSION
 
     if version > SCHEMA_VERSION:
@@ -126,8 +169,25 @@ def ensure_schema(conn: sqlite3.Connection, label: str = "database") -> int:
                 f"{label}: no migration from schema version {version} to "
                 f"{version + 1}"
             )
-        upgrade(conn)
+        with _atomic(conn, f"migrating {version} to {version + 1}", label):
+            upgrade(conn)
+            conn.execute(f"PRAGMA user_version = {version + 1}")
         version += 1
-        conn.execute(f"PRAGMA user_version = {version}")
-        conn.commit()
     return version
+
+
+def _statements(script: str) -> list[str]:
+    """Split ``schema.sql`` into statements sqlite3 can run one at a time.
+
+    The file holds plain ``CREATE`` statements and comments — no triggers, no
+    ``BEGIN``/``END`` bodies — so splitting on the semicolon is sound here and
+    would not be for arbitrary SQL.
+    """
+    statements = []
+    for chunk in script.split(";"):
+        body = "\n".join(
+            line for line in chunk.splitlines() if not line.strip().startswith("--")
+        ).strip()
+        if body:
+            statements.append(body)
+    return statements
