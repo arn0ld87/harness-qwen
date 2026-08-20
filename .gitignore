@@ -17,3 +17,6 @@ runs/
 *.db
 *.sqlite3
 coverage.json
+
+# Isolated worktrees used by background agents; never part of the tree.
+.claude/worktrees/

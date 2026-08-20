@@ -136,6 +136,7 @@ class HarnessConfig(BaseModel):
 class ResolvedConfig:
     config: HarnessConfig
     hardware_profile: dict | None
+    warnings: list[str]                              # values corrected, never silently
     def origin_of(self, path: str) -> Origin: ...    # dotted path
     def source_of(self, path: str) -> str: ...       # file, variable or flag
     def as_dict(self, *, reveal_secrets: bool = False) -> dict: ...
@@ -155,8 +156,21 @@ machine beats a number chosen for no machine; `null` in the profile's
 `recommended` block means the benchmark has not answered yet and is skipped
 rather than applied.
 
-Unknown keys are refused (`extra="forbid"`): a typo that is silently ignored
-looks exactly like a setting that took effect.
+Unknown keys are refused (`extra="forbid"`), in files and in the `HARNESS_*`
+namespace alike: a typo that is silently ignored looks exactly like a setting
+that took effect.
+
+Related values are reconciled rather than refused: a `soft_ceiling` above the
+window is lowered to it, and `context.context_window` follows `model.n_ctx`
+where that is set, because two numbers for one window let the budget grow a
+prompt past what the server accepts. Each correction lands in `warnings` —
+refusing instead would let a hardware profile measuring a smaller context
+block every command on the machine it was measured on.
+
+Secrets are hidden in two places: declared fields by name, and the value
+following any `--*-key` / `--*-token` / `--*-password` / `--*-secret` flag in
+`extra_flags`, which llama-server takes as `--api-key VALUE` — a shape no
+`name=value` pattern matches.
 
 ### Protocol layer
 
