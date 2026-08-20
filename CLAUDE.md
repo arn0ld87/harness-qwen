@@ -30,3 +30,17 @@ The harness targets a model running at 16.5 tokens per second. Waiting for a ful
 | `uv run pytest -m local_llm` | Full agent tests with the real model (slow, local only) |
 | `uv run harness doctor` | Probe hardware profile and runtime readiness |
 | `uv run harness benchmark` | Run capability benchmarks from `benchmarks/model-capabilities.json` |
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as GitHub issues in this repo. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage labels with default vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context documentation layout. See `docs/agents/domain.md`.
