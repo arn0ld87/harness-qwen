@@ -30,6 +30,7 @@ from harness.benchmark.report import (
     artifact_path,
     invalidate_artifact,
     read_run,
+    render_comparison,
     render_summary,
     write_run,
 )
@@ -78,6 +79,7 @@ __all__ = [
     "probe_identity",
     "read_run",
     "redact_argv",
+    "render_comparison",
     "render_summary",
     "sample_resources",
     "write_run",

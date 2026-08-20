@@ -123,6 +123,8 @@ harness memory inspect      # runs, resume state, step history and stored facts
 harness version             # print the package version
 harness run [OPTIONS]      # run an agent on a task (requires a running endpoint)
 harness chat [OPTIONS]     # interactive turn-based session (same loop as run)
+harness benchmark capability [OPTIONS]  # run the model-capability suite, write a JSON artefact
+harness benchmark compare A B           # set two run artefacts side by side
 ```
 
 The inspection commands (`config show`, `memory inspect`) take `--json` for
@@ -131,9 +133,14 @@ read-only — looking at a store never migrates or repairs it.
 
 `run` supports `--resume`, `--approve-confirmable`, budget overrides and
 config-file overrides. `chat` provides `/status`, `/context`, `/usage`,
-`/help` and `/exit` session commands. The `benchmark/` library (suite,
-runner, fingerprint, percentiles, JSON artefact) is implemented; a
-`harness benchmark` CLI over it is planned and does not exist yet.
+`/help` and `/exit` session commands. `harness benchmark` runs a suite
+(`capability`, `flags`, `tasks`) against a runtime and writes a fingerprinted
+JSON artefact; `benchmark compare` sets two artefacts side by side and states
+whether the delta is a capability change or a fingerprint that moved. An
+invalid run (serving process moved, wrong flags) exits 3, not 0 — a caller
+that treats 0 as "trustworthy measurement" cannot buy one. The canonical
+`flags` and `tasks` suites land with #20 and #21; until then either subcommand
+runs a custom suite via `--suite`.
 
 ## Documentation
 

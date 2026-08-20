@@ -96,6 +96,38 @@ def render_summary(run: BenchmarkRun) -> str:
     return "\n".join(lines)
 
 
+def render_comparison(a: BenchmarkRun, b: BenchmarkRun) -> str:
+    """Two runs side by side, and whether the delta between them means anything.
+
+    A number from one run is only an answer to "did it change?" when the other
+    run measured the same thing on the same machine — otherwise the delta is
+    hardware, flags or model file moving, not capability. The comparison states
+    that up front: it names what differs in the fingerprint before showing a
+    single latency, so a reader is not left to infer comparability from two
+    numbers that look similar for unrelated reasons.
+    """
+    lines: list[str] = []
+    lines.append(f"comparison   {a.run_id}  vs  {b.run_id}")
+    lines.append(f"  suite      {a.suite}  /  {b.suite}")
+
+    for label, run in (("A", a), ("B", b)):
+        if not run.valid:
+            reasons = ", ".join(entry.reason for entry in run.invalidations)
+            lines.append(f"  run {label}     INVALID ({reasons})")
+
+    comparable, mismatches = _comparable(a, b)
+    if comparable:
+        lines.append("  fingerprint comparable — host, model and runtime match")
+    else:
+        lines.append("  fingerprint NOT comparable — the delta is not a capability change:")
+        lines.extend(f"    - {redact(reason)}" for reason in mismatches)
+
+    lines.append("")
+    lines.append(_COMPARE_HEADER)
+    lines.extend(_comparison_rows(a, b))
+    return "\n".join(lines)
+
+
 # -- internals -------------------------------------------------------------
 
 
@@ -160,10 +192,74 @@ def _ratio(dist: Distribution | None) -> str:
     return "-" if dist is None else f"{dist.p50 * 100:.0f}%"
 
 
+# -- comparison internals --------------------------------------------------
+
+
+_COMPARE_HEADER = (
+    f"{'case':<28}{'A p50 ms':>11}{'B p50 ms':>11}"
+    f"{'A pass':>9}{'B pass':>9}{'A tok/s p50':>13}{'B tok/s p50':>13}"
+)
+
+
+def _comparable(a: BenchmarkRun, b: BenchmarkRun) -> tuple[bool, list[str]]:
+    """Same host, model and runtime — the three things that move a result on
+    their own. Anything else (flags, n_ctx) is recorded in the fingerprint too,
+    but these three are the floor: with one of them different, no per-case
+    number is a capability delta."""
+    mismatches: list[str] = []
+    ha, hb = a.fingerprint.host, b.fingerprint.host
+    if ha.hostname != hb.hostname:
+        mismatches.append(f"host: {ha.hostname} vs {hb.hostname}")
+    if ha.cpu_model != hb.cpu_model:
+        mismatches.append(f"cpu: {ha.cpu_model} vs {hb.cpu_model}")
+    if ha.gpus != hb.gpus:
+        mismatches.append(f"gpus: {ha.gpus} vs {hb.gpus}")
+    ma, mb = a.fingerprint.model, b.fingerprint.model
+    if ma.model_id != mb.model_id:
+        mismatches.append(f"model: {ma.model_id} vs {mb.model_id}")
+    if ma.quantization != mb.quantization:
+        mismatches.append(f"quantization: {ma.quantization} vs {mb.quantization}")
+    if a.fingerprint.runtime.base_url != b.fingerprint.runtime.base_url:
+        mismatches.append(
+            f"runtime: {a.fingerprint.runtime.base_url} vs "
+            f"{b.fingerprint.runtime.base_url}"
+        )
+    return not mismatches, mismatches
+
+
+def _comparison_rows(a: BenchmarkRun, b: BenchmarkRun) -> list[str]:
+    by_id_a = {case.case_id: case for case in a.cases}
+    by_id_b = {case.case_id: case for case in b.cases}
+    # Stable order: A's cases first (in file order), then anything only in B.
+    order = [case.case_id for case in a.cases]
+    order += [cid for cid in (by_id_b.keys() - by_id_a.keys())]
+
+    rows: list[str] = []
+    for cid in order:
+        ca = by_id_a.get(cid)
+        cb = by_id_b.get(cid)
+        label = cid
+        if ca is None:
+            label = f"{cid} (only B)"
+        elif cb is None:
+            label = f"{cid} (only A)"
+        rows.append(
+            f"{label:<28}"
+            f"{_at(ca.wall_clock_ms if ca else None, 'p50'):>11}"
+            f"{_at(cb.wall_clock_ms if cb else None, 'p50'):>11}"
+            f"{_rate(ca.success_rate if ca else None):>9}"
+            f"{_rate(cb.success_rate if cb else None):>9}"
+            f"{_at(ca.generation_tokens_per_s if ca else None, 'p50'):>13}"
+            f"{_at(cb.generation_tokens_per_s if cb else None, 'p50'):>13}"
+        )
+    return rows
+
+
 __all__ = [
     "artifact_path",
     "invalidate_artifact",
     "read_run",
+    "render_comparison",
     "render_summary",
     "write_run",
 ]

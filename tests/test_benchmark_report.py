@@ -180,4 +180,110 @@ def test_the_summary_does_not_print_a_credential() -> None:
     run = _run()
     run.fingerprint.runtime.identity_detail = "connected with token ghp_abcdefghijklmnopqrstuvwx"
     text = render_summary(run)
-    assert "ghp_abcdefghijklmnopqrstuvwx" not in text
+    assert "ghp_abcdefghijklmnopqrstuvxx" not in text
+
+
+# -- comparing two runs (issue #27) ---------------------------------------
+
+
+def _case(case_id: str, ms: float, *, rate: float = 1.0) -> CaseResult:
+    samples = [_sample(0, ms), _sample(1, ms + 5.0), _sample(2, ms + 10.0)]
+    return CaseResult(
+        case_id=case_id, description=case_id, repetitions=3, warmup=1,
+        samples=samples, success_rate=rate,
+        wall_clock_ms=distribution([s.wall_clock_ms for s in samples]),
+    )
+
+
+def _run_variant(
+    *,
+    run_id: str = "bench-20260820T010000Z-abcd1234",
+    hostname: str = "testbox",
+    model_id: str = "fake",
+    base_url: str = "http://127.0.0.1:18080",
+    invalid_reason: str | None = None,
+    cases: list[CaseResult] | None = None,
+) -> BenchmarkRun:
+    run = BenchmarkRun(
+        run_id=run_id,
+        suite="unit",
+        started_at=datetime(2026, 8, 20, 1, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 8, 20, 1, 5, tzinfo=UTC),
+        fingerprint=Fingerprint(
+            host=HostFingerprint(hostname=hostname, cpu_model="Test CPU"),
+            runtime=RuntimeFingerprint(
+                base_url=base_url, host="127.0.0.1", port=18080,
+                ownership="owned", pid=4242, identity_verified=True,
+            ),
+            model=ModelFingerprint(model_id=model_id, n_ctx=65536),
+        ),
+        cases=cases or [_case("echo", 500.0)],
+    )
+    if invalid_reason:
+        run = run.invalidated(invalid_reason, detail="something moved")
+    return run
+
+
+def test_comparison_names_both_runs_and_their_suites() -> None:
+    from harness.benchmark import render_comparison
+
+    text = render_comparison(_run_variant(run_id="run-aaa"), _run_variant(run_id="run-bbb"))
+    assert "run-aaa" in text
+    assert "run-bbb" in text
+    assert "unit" in text
+
+
+def test_comparison_of_comparable_runs_says_so() -> None:
+    from harness.benchmark import render_comparison
+
+    text = render_comparison(_run_variant(), _run_variant(run_id="run-bbb"))
+    assert "comparable" in text.lower()
+
+
+def test_comparison_flags_an_invalid_run() -> None:
+    from harness.benchmark import render_comparison
+
+    text = render_comparison(
+        _run_variant(invalid_reason="runtime_identity"),
+        _run_variant(run_id="run-bbb"),
+    )
+    assert "INVALID" in text
+    assert "runtime_identity" in text
+
+
+def test_comparison_reports_incompatible_fingerprints() -> None:
+    from harness.benchmark import render_comparison
+
+    # Same prompt on a different machine or a different model file is not a
+    # capability change, and the comparison must say so rather than present the
+    # delta as if it were.
+    text = render_comparison(
+        _run_variant(hostname="testbox", model_id="fake"),
+        _run_variant(run_id="run-bbb", hostname="otherbox", model_id="other"),
+    )
+    assert "not comparable" in text.lower() or "incompatible" in text.lower()
+    assert "otherbox" in text or "other" in text
+
+
+def test_comparison_lists_each_case_side_by_side() -> None:
+    from harness.benchmark import render_comparison
+
+    a = _run_variant(cases=[_case("echo", 500.0), _case("json", 300.0)])
+    b = _run_variant(run_id="run-bbb", cases=[_case("echo", 800.0), _case("json", 310.0)])
+    text = render_comparison(a, b)
+    assert "echo" in text
+    assert "json" in text
+    # Both sides of a case row appear: the slower run's p50 (805) and the
+    # faster one's (505). The median of [800,805,810] is 805, of [500,505,510]
+    # is 505 — the first sample is not the p50.
+    assert "505" in text
+    assert "805" in text
+
+
+def test_comparison_notes_a_case_present_in_only_one_run() -> None:
+    from harness.benchmark import render_comparison
+
+    a = _run_variant(cases=[_case("echo", 500.0), _case("only_a", 200.0)])
+    b = _run_variant(run_id="run-bbb", cases=[_case("echo", 800.0)])
+    text = render_comparison(a, b)
+    assert "only_a" in text

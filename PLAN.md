@@ -9,6 +9,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 - v0.2 Hardening (#5–#9, #33): COMPLETE
 - v0.3 Runtime & CLI (#10–#16): COMPLETE
 - v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17, #18 und #19 abgeschlossen, #20–#22 offen
+- #27 `harness benchmark` CLI: abgeschlossen (siehe Phase D)
 
 ## Ausfuehrungsprotokoll
 
@@ -123,8 +124,34 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 - [ ] #21 Harness vs Plain Loop (Task-Suite, Metriken, cold/warm, negative Results)
 - [ ] #22 Cache-/Prefix-Invarianten (Prefix-Hash pro Call, Cache-Hit-Quote)
 
+### Phase D — #27 `harness benchmark` CLI
+- [x] #27 CLI für Capability-, Flag- und Task-Benchmarks
+  - `cli_benchmark.py`: Typer-Subgruppe `benchmark` mit den klar getrennten
+    Unterkommandos `capability`, `flags`, `tasks` (jedes defaultet auf eine
+    kanonische Suite unter `benchmarks/`, überschreibbar mit `--suite`) sowie
+    `compare` (Vergleich zweier Run-Artefakte).
+  - Eine async `build_runner`-Seam konstruiert Provider + Handle über den
+    `LlamaServerSupervisor` (`ensure()` startet/attacht und gibt das Handle
+    für die Identitätsverifikation); Tests injecten einen Stub-Runner mit
+    `FakeProvider` und Schein-Probes (kein echter Server, kein Netzwerk).
+  - Config-/Runtime-Profil explizit wählbar: `--config`, `--profile`,
+    `--base-url`, `--attach`. Output-Verzeichnis (`--out`) und Run-ID
+    (`--run-id`) steuerbar; `--case` wählt Cases aus der Suite.
+  - Ungültige Runs (Identität unter dem Run geändert, etc.) werden als
+    `INVALID` ausgegeben und führen zu Exit-Code 3, nie zu stillen 0.
+  - JSON-Artefakt (`write_run`) plus kompakte Terminal-Zusammenfassung
+    (`render_summary`); `--json` gibt den Run als JSON aus.
+  - `render_comparison(a, b)` in `benchmark/report.py`: Side-by-side der
+    Per-Case-Perzentile, Fingerprint-Kompatibilität (Host/Modell/Runtime)
+    und Validität beider Runs.
+  - Exit-Codes: 0 success, 3 invalid measurements, 1 execution failure,
+    2 bad config.
+  - Tests: `tests/test_cli_benchmark.py` (FakeProvider/Stub-Runner),
+    `tests/test_benchmark_report.py` (`render_comparison`).
+
 ## Naechste Arbeiten
 
 Der naechste Plan ersetzt diesen und definiert die Arbeit an den verbleibenden
-offenen Issues (#18–#22) sowie neuen Themen. Bis dahin: `harness run` und
-`harness chat` sind der aktuelle Stand, auf dem alles Weitere aufbaut.
+offenen Issues (#20–#22, #23–#26, #28–#30) sowie neuen Themen. Bis dahin:
+`harness run`, `harness chat` und `harness benchmark` sind der aktuelle Stand,
+auf dem alles Weitere aufbaut.

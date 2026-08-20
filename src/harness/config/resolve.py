@@ -171,20 +171,31 @@ def load_config(
     config_file: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
     directory: Path | None = None,
+    profile_file: Path | None = None,
 ) -> ResolvedConfig:
-    """Resolve using the process environment and the conventional file names."""
+    """Resolve using the process environment and the conventional file names.
+
+    ``profile_file`` overrides the hardware profile discovered at
+    ``<directory>/config/hardware-profile.json``. ``None`` keeps the discovery
+    behaviour, so existing callers are unchanged; an explicit path lets a
+    command (``harness benchmark --profile …``) name the machine profile a run
+    is measured against rather than accepting whatever lives at the default
+    location.
+    """
     base = directory or Path.cwd()
     if config_file is None:
         config_file = next(
             (base / name for name in DEFAULT_CONFIG_NAMES if (base / name).exists()),
             None,
         )
-    profile = base / DEFAULT_PROFILE_PATH
+    if profile_file is None:
+        profile = base / DEFAULT_PROFILE_PATH
+        profile_file = profile if profile.exists() else None
     return resolve_config(
         config_file=config_file,
         env=os.environ,
         overrides=overrides,
-        profile_file=profile if profile.exists() else None,
+        profile_file=profile_file,
     )
 
 
