@@ -151,6 +151,19 @@ class Risk(enum.StrEnum):
     DENY = "deny"
 
 
+class NetworkMode(enum.StrEnum):
+    """Network policy a shell command runs under.
+
+    ``ISOLATED`` is the default: the sandbox gets its own network namespace
+    so an approved command still cannot reach the host network. ``ALLOWED`` is
+    the explicit, human-approved opt-out for commands that need network access
+    — it is never the default and is auditable on the :class:`ToolResult`.
+    """
+
+    ISOLATED = "isolated"
+    ALLOWED = "allowed"
+
+
 class ToolSpec(BaseModel):
     """Declaration of a tool as presented to the model."""
 
@@ -191,7 +204,7 @@ class ToolResult(BaseModel):
     error_kind: str | None = None
     """Set when ok is False: not_found, timeout, denied, invalid_arguments,
     execution_failed, permission_denied."""
-    network: str | None = None
+    network: NetworkMode | Literal["unsandboxed"] | None = None
     """Network policy the command ran under (``isolated``/``allowed``), or
     ``unsandboxed`` for the trusted read-only fallback when bubblewrap is
     absent. ``None`` means the command did not execute (denied/timeout)."""

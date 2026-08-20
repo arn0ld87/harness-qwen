@@ -31,7 +31,6 @@ def test_probe_sandbox_reports_available_when_bwrap_present() -> None:
     info = probe_sandbox()
     assert info.available is True
     assert info.bwrap_path is not None
-    assert info.network_isolated_by_default is True
 
 
 def test_probe_sandbox_reports_unavailable_when_bwrap_missing() -> None:

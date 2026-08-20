@@ -76,8 +76,6 @@ class SandboxInfo(BaseModel):
 
     available: bool = False
     bwrap_path: str | None = None
-    network_isolated_by_default: bool = True
-    """False only if the default network mode was changed away from isolation."""
 
 
 class ModelInfo(BaseModel):

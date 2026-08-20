@@ -81,8 +81,7 @@ def _render_hardware(p: HardwareProfile) -> None:
     t.add_row("OS", f"{p.os_release or UNKNOWN}   [dim]{p.kernel or ''}[/dim]")
 
     if p.sandbox.available:
-        net = "isolated" if p.sandbox.network_isolated_by_default else "allowed"
-        t.add_row("Sandbox", f"bwrap  [dim]network {net} by default[/dim]")
+        t.add_row("Sandbox", "bwrap  [dim]network isolated by default[/dim]")
     else:
         t.add_row("Sandbox", "[red]bwrap missing[/red]")
     console.print(t)

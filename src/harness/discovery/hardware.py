@@ -184,11 +184,7 @@ def probe_sandbox() -> SandboxInfo:
     than discovered only when a command is first denied.
     """
     bwrap = shutil.which("bwrap")
-    return SandboxInfo(
-        available=bwrap is not None,
-        bwrap_path=bwrap,
-        network_isolated_by_default=True,
-    )
+    return SandboxInfo(available=bwrap is not None, bwrap_path=bwrap)
 
 
 def _os_release_name() -> str | None:

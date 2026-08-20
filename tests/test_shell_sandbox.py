@@ -16,7 +16,8 @@ from unittest.mock import patch
 
 import pytest
 
-from harness.tools.shell import NetworkMode, _sandbox_argv, run_command
+from harness.core import NetworkMode
+from harness.tools.shell import _sandbox_argv, run_command
 
 
 def _no_bwrap(_cmd: str, /, *_a, **_k) -> str | None:
@@ -30,6 +31,10 @@ requires_bwrap = pytest.mark.skipif(
 )
 
 
+def _approve(_command: str, _reason: str) -> bool:
+    return True
+
+
 # --- fail-closed: no sandbox, no untrusted execution -----------------------
 
 
@@ -38,7 +43,7 @@ def test_untrusted_command_is_denied_when_sandbox_missing(tmp_path: Path) -> Non
         result = run_command(
             tmp_path,
             "sh -c 'cat /etc/passwd'",
-            confirm_callback=lambda _c, _r: True,
+            confirm_callback=_approve,
         )
     assert result.ok is False
     assert result.error_kind == "denied"
@@ -56,7 +61,9 @@ def test_trusted_command_runs_unsandboxed_when_bwrap_missing(tmp_path: Path) -> 
     assert result.network == "unsandboxed"
 
 
-def test_denied_command_records_no_network(tmp_path: Path) -> None:
+def test_classifier_denied_command_records_no_network(tmp_path: Path) -> None:
+    # /etc/passwd is denied by the classifier before the sandbox is involved;
+    # a command that never executes records no network policy.
     result = run_command(tmp_path, "cat /etc/passwd")
     assert result.ok is False
     assert result.network is None
@@ -84,12 +91,36 @@ def test_explicit_network_allowed_omits_unshare_net(tmp_path: Path) -> None:
 
 def test_default_network_mode_is_audited_on_result(tmp_path: Path) -> None:
     result = run_command(tmp_path, "ls")
-    assert result.network == "isolated"
+    assert result.network == NetworkMode.ISOLATED
 
 
-def test_explicit_network_mode_is_audited_on_result(tmp_path: Path) -> None:
+def test_network_allowed_without_approval_downgrades_to_isolated(
+    tmp_path: Path,
+) -> None:
+    # ALLOWED is the explicit opt-out, but network access is a separate
+    # privilege: without an approval mechanism it is never granted — the
+    # command runs isolated instead.
     result = run_command(tmp_path, "ls", network=NetworkMode.ALLOWED)
-    assert result.network == "allowed"
+    assert result.network == NetworkMode.ISOLATED
+
+
+def test_network_allowed_with_approval_is_audited(tmp_path: Path) -> None:
+    result = run_command(
+        tmp_path, "ls", network=NetworkMode.ALLOWED, confirm_callback=_approve,
+    )
+    assert result.network == NetworkMode.ALLOWED
+
+
+def test_network_allowed_approval_denied_downgrades_to_isolated(
+    tmp_path: Path,
+) -> None:
+    result = run_command(
+        tmp_path,
+        "ls",
+        network=NetworkMode.ALLOWED,
+        confirm_callback=lambda _c, _r: False,
+    )
+    assert result.network == NetworkMode.ISOLATED
 
 
 # --- isolation regression: requires bubblewrap ----------------------------
@@ -97,13 +128,31 @@ def test_explicit_network_mode_is_audited_on_result(tmp_path: Path) -> None:
 
 @requires_bwrap
 def test_home_is_isolated_to_tmp_home(tmp_path: Path) -> None:
-    result = run_command(
-        tmp_path, "printenv HOME",
-        confirm_callback=lambda _c, _r: True,
-    )
+    result = run_command(tmp_path, "printenv HOME", confirm_callback=_approve)
     assert result.ok is True
     assert "/tmp/home" in result.content
     assert str(Path.home()) not in result.content
+
+
+@requires_bwrap
+def test_system_paths_are_read_only(tmp_path: Path) -> None:
+    # /usr is ro-bound: an approved write inside it must fail. Proves system
+    # paths are mounted read-only, not writable from the sandbox.
+    result = run_command(
+        tmp_path, "touch /usr/bin/_harness_sandbox_marker", confirm_callback=_approve,
+    )
+    assert result.ok is False
+    assert result.exit_code != 0
+
+
+@requires_bwrap
+def test_symlink_escape_to_etc_is_unreachable(tmp_path: Path) -> None:
+    # Defense in depth: a workspace symlink pointing at /etc/passwd is denied
+    # by the classifier (which resolves it), and would also be blocked by the
+    # sandbox — /etc/passwd is not mounted. Either way it is unreachable.
+    (tmp_path / "escape").symlink_to("/etc/passwd")
+    result = run_command(tmp_path, "cat escape", confirm_callback=_approve)
+    assert result.ok is False
 
 
 @requires_bwrap
@@ -134,14 +183,10 @@ def test_untrusted_command_cannot_reach_host_network(tmp_path: Path) -> None:
             f'(("127.0.0.1",{port}),timeout=3); print(s.recv(2).decode()); s.close()\''
         )
         isolated = run_command(
-            tmp_path, cmd,
-            confirm_callback=lambda _c, _r: True,
-            network=NetworkMode.ISOLATED,
+            tmp_path, cmd, confirm_callback=_approve, network=NetworkMode.ISOLATED,
         )
         allowed = run_command(
-            tmp_path, cmd,
-            confirm_callback=lambda _c, _r: True,
-            network=NetworkMode.ALLOWED,
+            tmp_path, cmd, confirm_callback=_approve, network=NetworkMode.ALLOWED,
         )
         assert isolated.ok is False
         assert allowed.ok is True

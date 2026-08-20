@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import enum
 import os
 import shutil
 import signal
@@ -11,27 +10,14 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
-from harness.core import Risk, ToolResult
+from harness.core import NetworkMode, Risk, ToolResult
 from harness.tools._security import default_classifier
 from harness.tools.compression import compress_command_output, detect_kind
 
 ConfirmCallback = Callable[[str, str], bool]
 """Maps (command, risk_reason) to approval: True to run, False to deny."""
-
-
-class NetworkMode(enum.StrEnum):
-    """Network policy a shell command runs under.
-
-    ``ISOLATED`` is the default: the sandbox gets its own network namespace
-    (``--unshare-net``) so an approved command still cannot reach the host
-    network. ``ALLOWED`` is the explicit, auditable opt-out for commands a
-    human approved knowing they need network access — it runs in the sandbox
-    but shares the host network namespace.
-    """
-
-    ISOLATED = "isolated"
-    ALLOWED = "allowed"
 
 
 def run_command(
@@ -51,8 +37,13 @@ def run_command(
     executed without bubblewrap. A trusted (ALLOW) read-only command is the
     one documented exception — it may run unsandboxed when bwrap is absent,
     and the result records ``network="unsandboxed"`` so that gap is auditable
-    rather than silent. The default ``network`` mode isolates the network
-    namespace; ``NetworkMode.ALLOWED`` is the explicit, auditable opt-out.
+    rather than silent.
+
+    The default ``network`` mode isolates the network namespace.
+    ``NetworkMode.ALLOWED`` is the explicit, *approved* opt-out: it is only
+    honored when an approval callback is present and grants network access
+    specifically — otherwise the command falls back to ``ISOLATED`` so network
+    access is never granted without an approval, never silently.
     """
     started = time.perf_counter()
     workspace = workspace.resolve()
@@ -91,7 +82,19 @@ def run_command(
                 duration_ms=(time.perf_counter() - started) * 1000.0,
             )
 
-    sandbox = _sandbox_argv(workspace, command, network=network)
+    # Network access is a separate privilege from command risk. ALLOWED is the
+    # explicit opt-out, but it is only honored when an approval mechanism is
+    # present and grants it — otherwise the command runs isolated. Network
+    # access is never granted without an approval, and the resulting mode is
+    # auditable on the ToolResult.
+    effective_network = network
+    if effective_network is NetworkMode.ALLOWED and (
+        confirm_callback is None
+        or not confirm_callback(command, "network access requested")
+    ):
+        effective_network = NetworkMode.ISOLATED
+
+    sandbox = _sandbox_argv(workspace, command, network=effective_network)
     if sandbox is None:
         # Fail closed: an untrusted command — even one a human approved — is
         # never executed without the sandbox. There is no fallback for it.
@@ -108,10 +111,10 @@ def run_command(
             )
         # Trusted read-only commands are the documented unsandboxed fallback.
         argv: list[str] = ["/bin/sh", "-c", command]
-        network_mode = "unsandboxed"
+        network_mode: NetworkMode | Literal["unsandboxed"] = "unsandboxed"
     else:
         argv = sandbox
-        network_mode = str(network)
+        network_mode = effective_network
 
     try:
         proc = subprocess.Popen(
