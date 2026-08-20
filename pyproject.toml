@@ -58,8 +58,9 @@ agent = 88.0       # measured 90.9
 context = 80.0     # measured 83.2
 memory = 75.0      # measured 77.9
 protocol = 65.0    # measured 68.7
-security = 50.0    # measured 53.5 — lowest of the five and the one to raise
-                   # first: rules.py and shellsplit.py sit near 31% (#32).
+security = 97.0    # measured 99.4 after #32. The package where an untested
+                   # path is an unchecked security claim, so it carries the
+                   # highest floor in the tree, not the lowest.
 config = 95.0      # measured 97.5 — new, small and fully exercised
 diagnostics = 85.0 # measured 86.5 — readiness checks, tested against stubs
 runtime = 90.0     # measured 95.3 — process lifecycle, tested against a stub
@@ -70,6 +71,11 @@ tools = 40.0       # measured 44.2, dragged down by filesystem.py and git.py
 # boundary: `tools` could stay above 40% while it rotted to nothing.
 [tool.coverage_gate.files]
 "src/harness/tools/shell.py" = 85.0   # measured 90.6
+# shellsplit.py decides *which* command the classifier judges, so a gap here
+# moves the subject of the decision rather than the decision. Both files sit at
+# 100% / 99.7% and there is no reason for either to drop back.
+"src/harness/security/shellsplit.py" = 100.0
+"src/harness/security/classifier.py" = 97.0   # measured 99.7
 
 [tool.coverage.report]
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

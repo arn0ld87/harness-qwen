@@ -282,12 +282,15 @@ def _command_starts(tokens: list[str]) -> list[int]:
     An option may or may not consume the next token (``sudo -u root cmd`` vs
     ``sudo -n cmd``), so both successors are treated as candidates rather than
     guessing per option and letting a wrong guess hide the command.
+
+    ``tokens`` is never empty: the caller returns before this point when
+    tokenisation yields nothing, so every index on the frontier is valid.
     """
     candidates = {0}
     frontier = [0]
     while frontier:
         i = frontier.pop()
-        if i >= len(tokens) or not _is_prefix_like(tokens[i]):
+        if not _is_prefix_like(tokens[i]):
             continue
         nxt = [i + 1]
         if tokens[i].startswith("-") and len(tokens[i]) > 1:
@@ -330,6 +333,11 @@ def _classify_segment(
         tokens = shlex.split(segment)
     except ValueError as exc:
         return Risk.CONFIRM, f"command could not be parsed ({exc})"
+    # Unreachable from classify_command, which already skips blank segments —
+    # shlex treats a subset of the whitespace that str.strip() does, so a
+    # segment that survives that skip always tokenises to something. Kept, and
+    # kept here rather than repeated downstream, because it is the single point
+    # that guarantees tokens[0] exists for every helper below.
     if not tokens:
         return Risk.ALLOW, "empty segment"
 
@@ -359,8 +367,6 @@ def _workspace_operand_risk(
     tokens: list[str], *, workspace: str | Path | None
 ) -> tuple[Risk, str] | None:
     """Reject operands that a nominally read-only command resolves outside."""
-    if not tokens:
-        return None
     root = Path(workspace).resolve() if workspace is not None else None
     for token in tokens[1:]:
         if token == "--":
@@ -395,8 +401,6 @@ def _confirm_or_allow(tokens: list[str]) -> tuple[Risk, str]:
             return Risk.CONFIRM, reason
     if name in _CONFIRM_COMMANDS:
         return Risk.CONFIRM, _CONFIRM_COMMANDS[name]
-    if name == "systemctl":
-        return Risk.CONFIRM, "manages system services"
 
     for prefix in _ALLOW_PREFIXES:
         if tuple(normalised[:len(prefix)]) == prefix:
