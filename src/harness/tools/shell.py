@@ -25,7 +25,7 @@ def run_command(
     command: str,
     timeout: float = 30.0,
     confirm_callback: ConfirmCallback | None = None,
-    network: NetworkMode = NetworkMode.ISOLATED,
+    network: NetworkMode | str = NetworkMode.ISOLATED,
 ) -> ToolResult:
     """Execute a shell command with security classification and timeout.
 
@@ -39,7 +39,10 @@ def run_command(
     and the result records ``network="unsandboxed"`` so that gap is auditable
     rather than silent.
 
-    The default ``network`` mode isolates the network namespace.
+    The default ``network`` mode isolates the network namespace. Because
+    :class:`NetworkMode` is a ``StrEnum``, a decoded tool argument arrives as
+    a plain ``str``; it is coerced at this boundary and an unrecognized value
+    is denied rather than treated as "no isolation".
     ``NetworkMode.ALLOWED`` is the explicit, *approved* opt-out: it is only
     honored when an approval callback is present and grants network access
     specifically — otherwise the command falls back to ``ISOLATED`` so network
@@ -48,6 +51,19 @@ def run_command(
     started = time.perf_counter()
     workspace = workspace.resolve()
     cwd = str(workspace)
+
+    requested_network = _resolve_network(network)
+    if requested_network is None:
+        return ToolResult(
+            tool="run_command",
+            ok=False,
+            error_kind="denied",
+            content=(
+                f"Unknown network mode {network!r}: expected one of "
+                f"{', '.join(mode.value for mode in NetworkMode)}"
+            ),
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
 
     risk = default_classifier(command, workspace)
 
@@ -87,7 +103,7 @@ def run_command(
     # present and grants it — otherwise the command runs isolated. Network
     # access is never granted without an approval, and the resulting mode is
     # auditable on the ToolResult.
-    effective_network = network
+    effective_network = requested_network
     if effective_network is NetworkMode.ALLOWED and (
         confirm_callback is None
         or not confirm_callback(command, "network access requested")
@@ -152,6 +168,9 @@ def run_command(
             error_kind="timeout",
             content=f"Command exceeded timeout of {timeout}s",
             duration_ms=(time.perf_counter() - started) * 1000.0,
+            # The command already ran under this policy; a timeout must not
+            # erase which one, or persisted results cannot be audited.
+            network=network_mode,
         )
 
     kind = detect_kind(command)
@@ -192,8 +211,27 @@ def _sandbox_path(workspace: Path) -> str:
     return ":".join(str(entry) for entry in entries)
 
 
+def _resolve_network(network: NetworkMode | str) -> NetworkMode | None:
+    """Coerce a network policy at the boundary; ``None`` when unrecognized.
+
+    :class:`NetworkMode` is a ``StrEnum``, so an identity check against a
+    decoded JSON argument such as ``"isolated"`` would be false and would
+    silently drop the isolation it asks for. Unknown values return ``None``
+    so the caller can deny them instead of guessing.
+    """
+    if isinstance(network, NetworkMode):
+        return network
+    try:
+        return NetworkMode(network)
+    except ValueError:
+        return None
+
+
 def _sandbox_argv(
-    workspace: Path, command: str, *, network: NetworkMode = NetworkMode.ISOLATED
+    workspace: Path,
+    command: str,
+    *,
+    network: NetworkMode | str = NetworkMode.ISOLATED,
 ) -> list[str] | None:
     """Wrap a command in bubblewrap, or return ``None`` when bwrap is absent.
 
@@ -202,7 +240,8 @@ def _sandbox_argv(
     the command's risk class may run unsandboxed, never this function. The
     default ``network`` mode adds ``--unshare-net`` so an approved command
     still gets an isolated network namespace; ``NetworkMode.ALLOWED`` omits
-    it so the opt-out is a visible, auditable difference in the argv.
+    it so the opt-out is a visible, auditable difference in the argv. Every
+    other value — including an unrecognized one — is isolated.
     """
     bwrap = shutil.which("bwrap")
     if bwrap is None:
@@ -216,7 +255,7 @@ def _sandbox_argv(
         "--unshare-ipc",
         "--unshare-uts",
     ]
-    if network is NetworkMode.ISOLATED:
+    if _resolve_network(network) is not NetworkMode.ALLOWED:
         argv.append("--unshare-net")
     argv.extend((
         "--proc",

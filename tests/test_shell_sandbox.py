@@ -8,6 +8,7 @@ separate and auditable on the ToolResult.
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import threading
@@ -194,3 +195,68 @@ def test_untrusted_command_cannot_reach_host_network(tmp_path: Path) -> None:
         stop.set()
         server.close()
         thread.join(timeout=2)
+
+# --- boundary coercion: network mode from decoded tool arguments ----------
+
+
+def test_string_isolated_still_unshares_net(tmp_path: Path) -> None:
+    # NetworkMode is a StrEnum, so a decoded JSON argument arrives as a plain
+    # ``str``. An identity check would miss it and silently omit
+    # ``--unshare-net`` while the result still claimed "isolated".
+    argv = _sandbox_argv(tmp_path, "ls", network="isolated")
+    assert argv is not None
+    assert "--unshare-net" in argv
+
+
+def test_string_isolated_is_audited_as_enum(tmp_path: Path) -> None:
+    result = run_command(tmp_path, "ls", network="isolated")
+    assert result.network is NetworkMode.ISOLATED
+
+
+def test_string_allowed_without_approval_downgrades_to_isolated(
+    tmp_path: Path,
+) -> None:
+    # The approval gate must not be bypassable by passing the opt-out as a
+    # string instead of the enum member.
+    result = run_command(tmp_path, "ls", network="allowed")
+    assert result.network is NetworkMode.ISOLATED
+
+
+def test_string_allowed_with_approval_is_audited(tmp_path: Path) -> None:
+    result = run_command(
+        tmp_path, "ls", network="allowed", confirm_callback=_approve,
+    )
+    assert result.network is NetworkMode.ALLOWED
+
+
+@pytest.mark.parametrize("mode", ["host", "none", "ISOLATED", "", "1"])
+def test_unknown_network_mode_is_denied(tmp_path: Path, mode: str) -> None:
+    # Reject rather than guess: an unrecognized policy never falls through to
+    # host-network access.
+    result = run_command(tmp_path, "ls", network=mode, confirm_callback=_approve)
+    assert result.ok is False
+    assert result.error_kind == "denied"
+    assert "network" in result.content.lower()
+
+
+# --- timeouts stay auditable ---------------------------------------------
+
+
+def test_timeout_records_unsandboxed_network_policy(tmp_path: Path) -> None:
+    # ``cat`` on a FIFO with no writer is trusted and blocks, so it times out
+    # on the documented unsandboxed path. The command already ran; the result
+    # must still say under which policy.
+    os.mkfifo(tmp_path / "pipe")
+    with patch("harness.tools.shell.shutil.which", _no_bwrap):
+        result = run_command(tmp_path, "cat pipe", timeout=0.3)
+    assert result.error_kind == "timeout"
+    assert result.network == "unsandboxed"
+
+
+@requires_bwrap
+def test_timeout_records_isolated_network_policy(tmp_path: Path) -> None:
+    result = run_command(
+        tmp_path, "sleep 5", timeout=0.3, confirm_callback=_approve,
+    )
+    assert result.error_kind == "timeout"
+    assert result.network is NetworkMode.ISOLATED
