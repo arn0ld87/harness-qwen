@@ -65,6 +65,12 @@ def _fake_bwrap(cmd: str, /, *_a, **_k) -> str | None:
     return "/usr/bin/bwrap" if cmd == "bwrap" else _REAL_WHICH(cmd)
 
 
+requires_python3 = pytest.mark.skipif(
+    _REAL_WHICH("python3") is None,
+    reason="python3 not available as a sandbox network client",
+)
+
+
 def _approve(_command: str, _reason: str) -> bool:
     return True
 
@@ -196,6 +202,7 @@ def test_symlink_escape_to_etc_is_unreachable(tmp_path: Path) -> None:
 
 
 @requires_bwrap
+@requires_python3
 def test_untrusted_command_cannot_reach_host_network(tmp_path: Path) -> None:
     """An approved command in the isolated namespace cannot reach a listener
     the host process opened; the same command in the allowed namespace can."""

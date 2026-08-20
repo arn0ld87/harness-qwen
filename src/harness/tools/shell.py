@@ -267,19 +267,8 @@ def _sandbox_argv(
         "--ro-bind",
         "/usr",
         "/usr",
-        "--symlink",
-        "usr/bin",
-        "/bin",
-        "--symlink",
-        "usr/bin",
-        "/sbin",
-        "--symlink",
-        "usr/lib",
-        "/lib",
-        "--symlink",
-        "usr/lib",
-        "/lib64",
     ))
+    _append_toplevel_links(argv)
     for source in (Path("/etc/ld.so.cache"), Path("/etc/localtime"), Path("/etc/ssl")):
         if source.exists():
             _append_parent_dirs(argv, source.parent)
@@ -320,6 +309,25 @@ def _sandbox_argv(
         )
     )
     return argv
+
+
+def _append_toplevel_links(argv: list[str]) -> None:
+    """Reproduce the host's top-level directory layout inside the sandbox.
+
+    ``/bin``, ``/sbin``, ``/lib`` and ``/lib64`` differ between distributions:
+    Arch points every one of them at ``usr/lib`` or ``usr/bin``, Debian and
+    Ubuntu point ``/sbin`` at ``usr/sbin`` and ``/lib64`` at ``usr/lib64``.
+    Hard-coding one distribution's layout hides the dynamic loader from the
+    sandbox, and ``execvp`` then reports a missing file for a binary that
+    exists. Mirroring what the host actually has keeps this portable.
+    """
+    for name in ("/bin", "/sbin", "/lib", "/lib64", "/lib32"):
+        path = Path(name)
+        if path.is_symlink():
+            argv.extend(("--symlink", os.readlink(path), name))
+        elif path.is_dir():
+            # A real directory rather than a merged-usr symlink: bind it.
+            argv.extend(("--ro-bind", name, name))
 
 
 def _append_parent_dirs(argv: list[str], path: Path) -> None:
