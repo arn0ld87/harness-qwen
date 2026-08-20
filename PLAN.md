@@ -1,166 +1,110 @@
-# Plan: ready-for-agent Issues lösen
+# Plan: ready-for-agent Issues loesen (abgeschlossen)
 
-Ziel: Alle GitHub-Issues mit Label `ready-for-agent` (#5–#22) umsetzen.
-Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
+Ziel war: Alle GitHub-Issues mit Label `ready-for-agent` (#5–#22) umsetzen.
+Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 `uv run python -m pytest -m "not local_llm"` als Verifikation.
 
-## Ist-Lage (Assessment-Workflow, 18 Agenten)
+## Status — abgeschlossen
 
-- v0.2 Hardening (#5–#9): PARTIAL — Bestandscode, chirurgische Änderungen.
-- v0.3 Runtime & CLI (#10–#16): NOT-STARTED außer #16 PARTIAL — neue Pakete.
-- v0.4 Retrieval & Benchmarks (#17–#22): NOT-STARTED außer #18 PARTIAL.
+- v0.2 Hardening (#5–#9, #33): COMPLETE
+- v0.3 Runtime & CLI (#10–#16): COMPLETE
+- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17 abgeschlossen, #18–#22 offen
 
-## Reihenfolge (nach Abhängigkeiten)
+## Ausfuehrungsprotokoll
 
-### Phase A — v0.2 Hardening (unabhängig voneinander)
-- [x] #5 WorkspaceBaseline Git-unabhängig + FileEvidence per Fingerprint
-- [x] #6 ContextOverflow netto: RetrieveAgain bei Overflow skippen, Netto-Token-Rechnung, Hard-Ceiling
-- [x] #7 Shell-Sandbox fail-closed + --unshare-net default + doctor-Erkennung
-- [x] #8 Resume UNCERTAIN + Side-Effect-Policy (ToolSpec.idempotency/side_effect)
-
-#### Sub-Slice 8.1 — Side-Effect-Klasse und UNCERTAIN-Resume
-1. `core.SideEffect` (`none`/`idempotent`/`mutating`), `ToolSpec.side_effect`
-   mit fail-closed Default `mutating`. Nicht in `to_openai_tool()` — der
-   Prefix bleibt byteidentisch.
-2. `StepStatus.UNCERTAIN`; Schema bleibt bei v2 (status hat kein CHECK).
-3. Resume differenziert: `model_call` und nicht-mutierende Tools -> `FAILED`
-   (sicher wiederholbar), mutierende Tool-Steps -> `UNCERTAIN`.
-4. Guard: der erste identische Wiederholungsversuch eines UNCERTAIN-Calls
-   wird nicht ausgefuehrt, sondern als `uncertain_side_effect` zurueckgemeldet.
-5. Bericht: `RunResult.uncertain_steps`, Journal-Event, `open_problems`,
-   Append-Hinweis an das Modell.
-6. Tests: Crash vor Side Effect, nach Side Effect/vor Checkpoint, nach
-   Checkpoint, read-only Tool, Guard-Verhalten.
-- [x] #9 CI: einmaliger Coverage-Lauf, --cov-fail-under, Capability-Marker, ruff+pytest--cov
-
-#### Sub-Slice 9.1 — Einmaliger Lauf und dokumentierte Coverage-Gates
-1. `scripts/coverage_gate.py`: liest `coverage.json`, prueft globale und
-   modulweise Mindestabdeckung, meldet jede Unterschreitung einzeln.
-2. Schwellen in `pyproject.toml` (`[tool.coverage_gate]`) — anhebbar ohne
-   Codeaenderung, Startwerte knapp unter dem Ist-Stand statt kuenstlich rot.
-3. Marker `sandbox` fuer bwrap-abhaengige Tests, zusaetzlich zum
-   bestehenden skipif; `local_llm` und `slow` bleiben unveraendert.
-4. CI: ein Testlauf mit Coverage statt zwei, `-ra` fuer sichtbare
-   Skip-Gruende, Gate als eigener Schritt mit eindeutiger Fehlermeldung.
+### Phase A — v0.2 Hardening
+- [#5] WorkspaceBaseline Git-unabhaengig + FileEvidence per Fingerprint
+- [#6] ContextOverflow netto: RetrieveAgain bei Overflow skippen, Netto-Token-Rechnung, Hard-Ceiling
+- [#7] Shell-Sandbox fail-closed + `--unshare-net` default + doctor-Erkennung
+- [#8] Resume UNCERTAIN + Side-Effect-Policy (ToolSpec.idempotency/side_effect)
+  - `core.SideEffect` (`none`/`idempotent`/`mutating`), `ToolSpec.side_effect`
+    mit fail-closed Default `mutating`. Nicht in `to_openai_tool()`.
+  - `StepStatus.UNCERTAIN`; Schema bleibt bei v2 (status hat kein CHECK).
+  - Resume differenziert: `model_call` und nicht-mutierende Tools -> `FAILED`,
+    mutierende Tool-Steps -> `UNCERTAIN`.
+  - Guard: erster identischer Wiederholungsversuch eines UNCERTAIN-Calls wird
+    als `uncertain_side_effect` zurueckgemeldet.
+  - Bericht: `RunResult.uncertain_steps`, Journal-Event, `open_problems`,
+    Append-Hinweis an das Modell.
+  - Tests: Crash vor Side Effect, nach Side Effect/vor Checkpoint, nach
+    Checkpoint, read-only Tool, Guard-Verhalten.
+- [#9] CI: einmaliger Coverage-Lauf, `--cov-fail-under`, Capability-Marker,
+  ruff + pytest --cov
+  - `scripts/coverage_gate.py`: liest `coverage.json`, prueft globale und
+    modulweise Mindestabdeckung, meldet jede Unterschreitung einzeln.
+  - Schwellen in `pyproject.toml` (`[tool.coverage_gate]`).
+  - Marker `sandbox` fuer bwrap-abhaengige Tests.
+  - CI: ein Testlauf mit Coverage statt zwei, `-ra` fuer sichtbare
+    Skip-Gruende, Gate als eigener Schritt.
+- [#33] Prozess-Substitution klassifizieren, Deckel schliessen
+  - `<(...)`/`>(...)` wie `$(...)` als Segment klassifiziert
+  - Tiefenlimit endet in CONFIRM statt ALLOW
+  - ALLOW traegt die Begruendung der zutreffenden Regel
+  - Splitter dedupliziert: classifier importiert shellsplit
 
 ### Phase B — v0.3 Runtime & CLI
-- [x] #10 runtime/ Supervisor (Start/Stop/Health, PID, Attach, Crash, stdout secret-safe)
+- [#10] `runtime/` Supervisor (Start/Stop/Health, PID, Attach, Crash,
+  stdout secret-safe)
+  - `runtime/handle.py`: `RuntimeHandle` mit Ownership (owned/attached)
+  - `runtime/argv.py`: Startkommando aus `ModelConfig`/`RuntimeConfig`
+  - `runtime/supervisor.py`: start/attach/health/stop. Health-Wait mit Timeout
+    und Klassifikation (crashed vs. timeout vs. laedt noch).
+  - Graceful stop (SIGTERM), harter Kill nur nach Frist; `stop()` beendet
+    niemals einen attached Prozess.
+  - stdout/stderr zeilenweise durch `telemetry.redact` in eine Logdatei.
+- [#11] Portbesitz, stale/foreign, Startvalidierung (auf #10)
+  - `runtime/port.py`: Portbelegung klassifizieren (frei / eigener / fremder
+    llama-server / fremder Dienst).
+  - Start prueft vorher: belegter Port fuehrt zu klarem Fehler.
+  - Nach dem Start wird verifiziert, dass der antwortende Endpoint zum eben
+    gestarteten Prozess gehoert.
+  - Attach nur bei expliziter Konfiguration.
+- [#12] `config/` Schicht (Defaults < File < Env < CLI, redigiert,
+  Hardware-Profil, typisiert)
+  - `config/schema.py`: `RuntimeConfig`, `ModelConfig`, `SandboxConfig`,
+    `HarnessConfig`. Budget bleibt `core.Budget`.
+  - Defaults referenzieren bestehende Definitionen, statt Zahlen zu
+    duplizieren. Genau ein Eigentuemer pro Wert.
+  - `config/resolve.py`: Defaults < Datei < Env (`HARNESS_*`) < CLI, jedes
+    Feld mit Herkunft. `ResolvedConfig.origins` traegt den dotted path.
+  - Redaktion beim Ausgeben ueber `telemetry.redact`.
+  - Hardware-Profil: `config/hardware-profile.json` wird gelesen, wenn
+    vorhanden; fehlt es, laeuft alles weiter.
+- [#13] `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
+  - `tools/builtin.py`: acht Tools mit ToolSpecs (Risk + SideEffect).
+  - `session.py`: eine Stelle weiss, wie die acht Komponenten zusammengehen.
+  - `cli_run.py`: Exit-Codes je Stop-Grund, JSON, Resume, Overrides.
+  - `--approve-confirmable`: ohne Genehmigungsweg kann ein unbeaufsichtigter
+    Lauf nichts tun, was der Classifier nicht ohnehin erlaubt.
+  - Systemprompt geschaerft.
+- [#14] `harness chat` (gleiche Komponenten, `/status` `/context` `/usage` `/exit`)
+  - Kein zweiter Agent-Loop: jeder Turn ist ein Lauf desselben `AgentLoop`.
+  - Session-Ziel steht im gecachten Prefix.
+  - Nachricht wird in persistierten RuntimeState geschrieben, nicht auf den
+    Assembler.
+  - Bestaetigungen sind echte Entscheidung eines Menschen.
+  - `/status`, `/context`, `/usage`, `/help`, `/exit`.
+- [#15] `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
+  - `MemoryStore(path, read_only=True)`: `mode=ro`, kein `journal_mode`-Write,
+    kein FTS-Aufbau. `migrations.check_schema` prueft die Version, statt sie
+    zu heben.
+  - `memory/inspect.py`: eine Payload fuer Mensch und `--json`.
+  - Redaktion ueber `telemetry.redact.redact_data`.
+  - `cli_inspect.py` traegt beide Kommandos; `cli.py` bleibt unter der
+    500-Zeilen-Grenze und behaelt `doctor`.
+  - `config show`: Wert, Ebene und Quelle je dotted path.
+- [#16] `harness doctor` ausbauen (Sandbox/Port/Health/JSON-Exit, auf #7/#10/#12)
 
-#### Sub-Slice 10.1 — Lifecycle eines lokalen llama-server
-1. `runtime/handle.py`: `RuntimeHandle` mit Ownership (owned/attached), PID,
-   Startzeit, Log-Pfad. Owned und attached sind verschiedene Typzustaende,
-   nicht ein Flag, das man vergisst zu pruefen.
-2. `runtime/argv.py`: Startkommando aus `ModelConfig`/`RuntimeConfig`, typisiert
-   vor `extra_flags`.
-3. `runtime/supervisor.py`: start/attach/health/stop. Health-Wait mit Timeout
-   und Klassifikation (crashed vs. timeout vs. laedt noch).
-4. Graceful stop (SIGTERM), harter Kill nur nach Frist; `stop()` beendet
-   niemals einen attached Prozess.
-5. stdout/stderr zeilenweise durch `telemetry.redact` in eine Logdatei.
-6. Tests: Stub-Server statt 35B-Modell (Start, langsamer Start, Crash beim
-   Start, Crash im Betrieb, Secret im Log, Stop-Verweigerung bei attached).
-   Zusaetzlich ein `local_llm`-Test, der an die laufende Instanz attached,
-   ohne sie zu stoppen.
-- [x] #11 Portbesitz, stale/foreign, Startvalidierung (auf #10)
-
-#### Sub-Slice 11.1 — Kein stiller Start gegen einen fremden Prozess
-1. `runtime/port.py`: Portbelegung klassifizieren (frei / eigener / fremder
-   llama-server / fremder Dienst), inklusive PID und Startzeit des Inhabers.
-2. Start prueft vorher: belegter Port fuehrt zu einem klaren Fehler, nicht zu
-   einem scheinbar erfolgreichen Start gegen den Altprozess.
-3. Nach dem Start wird verifiziert, dass der antwortende Endpoint zum eben
-   gestarteten Prozess gehoert (PID/Startzeit, nicht nur "antwortet").
-4. Attach nur bei expliziter Konfiguration; stale/foreign wird benannt.
-5. Tests: Altserver haelt den Port, neuer Start scheitert, Health bleibt
-   erreichbar; fremder Nicht-llama-Dienst; Identitaetspruefung schlaegt fehl.
-- [x] #12 config/ Schicht (Defaults<File<Env<CLI, redigiert, Hardware-Profil, typisiert)
-
-#### Sub-Slice 12.1 — Typisierte Konfiguration mit Provenance
-1. `config/schema.py`: `RuntimeConfig`, `ModelConfig`, `SandboxConfig`,
-   `HarnessConfig`. Budget bleibt `core.Budget` — kein zweites Modell fuer
-   dieselben Werte.
-2. Defaults referenzieren die bestehenden Definitionen (`budget.py`,
-   `llamacpp.py`), statt Zahlen zu duplizieren. Genau ein Eigentuemer pro Wert.
-3. `config/resolve.py`: Defaults < Datei < Env (`HARNESS_*`) < CLI, jedes Feld
-   mit Herkunft. `ResolvedConfig.origins` traegt den dotted path.
-4. Redaktion beim Ausgeben ueber `telemetry.redact`, nicht ueber eine zweite
-   Musterliste.
-5. Hardware-Profil: `config/hardware-profile.json` wird gelesen, wenn
-   vorhanden; fehlt es, laeuft alles weiter (kein Hard-Block fremder Systeme).
-6. Tests: Prioritaetskette, Typvalidierung, Redaktion, Provenance, fehlendes
-   Profil, kaputte Datei.
-- [x] #13 `harness run` (Exit-Codes, Resume, Budget/Config-Overrides, kein CoT)
-
-#### Sub-Slice 13.1 — Vom Baukasten zum laufenden Agenten
-1. `tools/builtin.py`: die acht Tools bekommen ToolSpecs mit Risk **und**
-   SideEffect. Die Funktionen gab es, die Deklaration fehlte — kein Agent
-   konnte sie aufrufen.
-2. `session.py`: eine Stelle weiss, wie die acht Komponenten zusammengehen.
-   `run` und `chat` unterscheiden sich darin, wie sie mit einem Menschen
-   reden, nicht darin, was sie zusammenbauen.
-3. `cli_run.py`: Exit-Codes je Stop-Grund, JSON, Resume, Overrides ueber
-   dieselbe Config-Aufloesung wie alles andere.
-4. `--approve-confirmable`: ohne Genehmigungsweg kann ein unbeaufsichtigter
-   Lauf nichts tun, was der Classifier nicht ohnehin erlaubt. Explizit,
-   protokolliert, DENY bleibt DENY.
-5. Systemprompt geschaerft, nachdem das 35B-Modell im echten Lauf einen Plan
-   statt einer Aenderung lieferte.
-- [x] #14 `harness chat` (gleiche Komponenten, /status /context /usage /exit)
-
-#### Sub-Slice 14.1 — Dieselbe Maschine, ein Mensch dazwischen
-1. Kein zweiter Agent-Loop: jeder Turn ist ein Lauf desselben `AgentLoop`
-   gegen denselben Store. Eine zweite Stelle, die Budgets, Verifikation und
-   die Sicherheitsgrenze durchsetzt, waere die, die auseinanderlaeuft.
-2. Das Session-Ziel steht im gecachten Prefix und wird von der ersten
-   Nachricht gesetzt. Folgenachrichten gehen in die Append-Zone — ein Ziel
-   pro Turn wuerde den Prefix umschreiben und pro Eingabe ~25 s kosten.
-3. Die Nachricht wird in den persistierten RuntimeState geschrieben, nicht
-   auf den Assembler: der Loop restauriert diesen Zustand beim Eintritt und
-   wuerde alles ueberschreiben, was vorher gesetzt wurde. Damit ist der Turn
-   auch resumierbar.
-4. Bestaetigungen sind hier eine echte Entscheidung eines Menschen, mit
-   Kommando und Begruendung des Classifiers vor Augen.
-5. `/status`, `/context`, `/usage`, `/help`, `/exit`.
-- [x] #15 `config show` + `memory inspect` (Provenance, JSON, keine Mutation)
-
-#### Sub-Slice 15.1 — Inspektion ohne SQLite-Handarbeit
-1. `MemoryStore(path, read_only=True)`: Verbindung als `mode=ro`, kein
-   `journal_mode`-Write, kein FTS-Aufbau. `migrations.check_schema` prueft
-   die Version, statt sie zu heben — Ansehen ist keine Zustimmung zur
-   Migration.
-2. `memory/inspect.py`: eine Payload fuer Mensch und `--json`, damit beide
-   dieselbe Teilmenge sehen. Unlesbare Zeilen werden pro Run als `errors`
-   gemeldet, nicht geworfen — ein kaputter Store ist der Anlass des Befehls.
-3. Redaktion ueber `telemetry.redact.redact_data` (neu, strukturerhaltend):
-   Step-Argumente sind das, womit ein Tool aufgerufen wurde, inklusive
-   Auth-Header.
-4. `cli_inspect.py` traegt beide Kommandos; `cli.py` bleibt unter der
-   500-Zeilen-Grenze und behaelt `doctor`.
-5. `config show`: Wert, Ebene und Quelle je dotted path, Secrets doppelt
-   entfernt (deklariert per Name, frei formulierte per Textscrubber),
-   `ResolvedConfig.warnings` mit ausgegeben.
-6. Tests: Provenance, Redaktion in beiden Ausgaben, Run-/Status-Filter,
-   unbekannter Run, fehlende Datei, Fremddatei, alte Schema-Version ohne
-   Migration, beschaedigter TaskState, Byte-Gleichheit der DB nach dem Lauf.
-- [x] #16 `harness doctor` ausbauen (Sandbox/Port/Health/JSON-Exit, auf #7/#10/#12)
-
-#### Sub-Slice 33.1 — Prozess-Substitution und fail-closed Tiefenlimit
-- [x] `<(...)`/`>(...)` werden wie `$(...)` als Segment klassifiziert
-- [x] Tiefenlimit endet in CONFIRM statt ALLOW
-- [x] ALLOW traegt die Begruendung der Regel, die zugetroffen hat
-- [x] Splitter dedupliziert: classifier importiert shellsplit
-
-### Phase C — v0.4 Retrieval & Benchmarks
-- [ ] #17 retrieval/ Retriever-Interface + SqliteFtsRetriever (FTS5-Fallback)
+### Phase C — v0.4 Retrieval & Benchmarks (PARTIAL)
+- [x] #17 `retrieval/` Retriever-Interface + SqliteFtsRetriever (FTS5-Fallback)
 - [ ] #18 Retrieval als Tool in ToolRegistry (Append-Zone, Prefix-stabil, E2E)
-- [ ] #19 benchmark/ Framework (ID, Fingerprint, Warmup/Mess, JSON, Perzentile)
-- [ ] #20 Flag-Sweep (Prozessidentität, Invaliditätsregeln)
+- [ ] #19 `benchmark/` Framework (ID, Fingerprint, Warmup/Mess, JSON, Perzentile)
+- [ ] #20 Flag-Sweep (Prozessidentitaet, Invaliditaetsregeln)
 - [ ] #21 Harness vs Plain Loop (Task-Suite, Metriken, cold/warm, negative Results)
 - [ ] #22 Cache-/Prefix-Invarianten (Prefix-Hash pro Call, Cache-Hit-Quote)
 
-## Pro Slice
-1. PLAN-Sub-Slice spezifizieren.
-2. TDD: Test zuerst (rot), dann Implementierung (grün).
-3. `uv run ruff check .` + `uv run python -m pytest -m "not local_llm"`.
-4. Commit (imperativ, <50 Zeichen Subject, Issue-Referenz im Body).
-5. Issue schließen mit Kommentar + Arbeitsprotokoll-Pointer.
+## Naechste Arbeiten
+
+Der naechste Plan ersetzt diesen und definiert die Arbeit an den verbleibenden
+offenen Issues (#18–#22) sowie neuen Themen. Bis dahin: `harness run` und
+`harness chat` sind der aktuelle Stand, auf dem alles Weitere aufbaut.

@@ -240,10 +240,14 @@ addressable by id.
 
 ## 7. Retrieval
 
-Retrieval is planned behind a future `Retriever` interface (`retrieval/`, per
-ARCHITECTURE.md); no adapter is implemented yet. SQLite persistent facts with
-optional FTS5 exist today, but they are not exposed as a retrieval tool. No
-vector database is present.
+The `Retriever` interface and `SqliteFtsRetriever` adapter are implemented
+(`src/harness/retrieval/`). The retriever queries the existing FTS5 persistent-
+facts index from `harness.memory.facts` without duplicating data across tables.
+It takes an open `MemoryStore` (not a path) so it cannot access a database the
+caller did not already open.
+
+Retrieval is not yet exposed as an agent tool. The model has no tool to query
+persistent facts; adding one is the next step. No vector database is present.
 
 Retrieval is a **tool**, not a distinct protocol action — `request_context` is
 deliberately absent from the action vocabulary. It is triggered the same way

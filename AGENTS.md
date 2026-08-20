@@ -21,18 +21,21 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/models/` | `ModelProvider` interface, `LlamaCppProvider`, `FakeProvider` |
 | `src/harness/config/` | Typed configuration: defaults < profile < file < env < CLI, with provenance |
 | `src/harness/diagnostics/` | Pre-flight readiness checks behind `harness doctor` |
-| `src/harness/runtime/` | `LlamaServerSupervisor`: start/attach/health/stop, owned vs attached |
+| `src/harness/runtime/` | `LlamaServerSupervisor`: start/attach/health/stop, owned vs attached; port verification |
 | `src/harness/context/` | `PromptAssembler`, `TokenBudget`, `CacheEconomics`, compressors |
 | `src/harness/agent/` | `AgentLoop`, roles, `Planner`, `TaskState`, `RetryPolicy` |
 | `src/harness/protocol/` | `ActionCodec` (native tool_calls or constrained JSON), schemas |
-| `src/harness/tools/` | Registry, typed tools, `ToolResult` compression |
-| `src/harness/memory/` | SQLite: task state, run journal, persistent facts |
+| `src/harness/tools/` | Registry, typed tools, shell/filesystem/git exec, `ToolResult` compression, `builtin.py` specs, internal `_security.py` helpers |
+| `src/harness/memory/` | SQLite: task state, run journal, persistent facts (`facts.py`), read-only inspect (`inspect.py`), schema migrations (`migrations.py`) |
 | `src/harness/retrieval/` | `Retriever` interface, `SqliteFtsRetriever` over persistent facts |
-| `src/harness/security/` | Command classification (allow/confirm/deny) and approval gate |
-| `src/harness/telemetry/` | Structured run log (no CoT, no secrets) |
-| `src/harness/benchmark/` | Planned; not implemented |
+| `src/harness/security/` | Command classification (allow/confirm/deny), shell splitting, approval gate |
+| `src/harness/telemetry/` | Structured run log (no CoT, no secrets), redaction helpers |
 | `src/harness/session.py` | Assembles a runnable `AgentLoop` from configuration |
-| `src/harness/cli.py` | Typer entry point |
+| `src/harness/cli.py` | Typer entry point — `doctor`, `model-info`, `version` |
+| `src/harness/cli_run.py` | `run` command with resume, overrides, `--approve-confirmable` |
+| `src/harness/cli_chat.py` | `chat` command: `/status`, `/context`, `/usage`, `/exit` |
+| `src/harness/cli_inspect.py` | `config show` and `memory inspect` with `--json` |
+| `src/harness/benchmark/` | Planned; not implemented |
 
 ## Code style
 
@@ -67,20 +70,20 @@ client.
 
 | Package | Floor | Measured 2026-08-20 |
 |---|---|---|
-| `agent` | 88% | 90.9% |
-| `config` | 95% | 97.5% |
+| `agent` | 88% | 91.2% |
+| `config` | 95% | 98.0% |
 | `diagnostics` | 85% | 86.5% |
-| `context` | 80% | 83.2% |
+| `context` | 80% | 83.5% |
 | `memory` | 75% | 91.9% |
 | `protocol` | 65% | 68.7% |
 | `retrieval` | 97% | 100.0% |
-| `runtime` | 90% | 95.3% |
-| `security` | 97% | 99.4% |
-| `tools` | 40% | 44.2% |
-| `security/classifier.py` (file) | 97% | 99.7% |
+| `runtime` | 90% | 93.2% |
+| `security` | 97% | 99.3% |
+| `tools` | 40% | 56.2% |
+| `security/classifier.py` (file) | 97% | 99.5% |
 | `security/shellsplit.py` (file) | 100% | 100% |
-| `tools/shell.py` (file) | 85% | 90.6% |
-| total | 66% | 73.9% |
+| `tools/shell.py` (file) | 85% | 91.5% |
+| total | 66% | 79.4% |
 
 Three files carry their own floor because a package average hides its riskiest
 member. `tools` is held down by `filesystem.py` and `git.py` having no unit

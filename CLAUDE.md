@@ -4,7 +4,7 @@ This file supplements [AGENTS.md](AGENTS.md), which holds the general working ag
 
 ## Before changing context handling
 
-Anyone working on `PromptAssembler`, `TokenBudget`, `CacheEconomics`, or the prompt-building pipeline must read `docs/CONTEXT.md` first. The cache reprocesses the entire prefix (24.83 s per 4.8k tokens at first load) if a single byte changes; cost-benefit decisions for compression are non-obvious and empirically grounded in measured pp_rate curves from `docs/DISCOVERY.md`.
+Anyone working on `PromptAssembler`, `TokenBudget`, `CacheEconomics`, or the prompt-building pipeline must read `CONTEXT.md` first. The cache reprocesses the entire prefix (24.83 s per 4.8k tokens at first load) if a single byte changes; cost-benefit decisions for compression are non-obvious and empirically grounded in measured pp_rate curves from `docs/DISCOVERY.md`.
 
 ## Verify, do not assert
 
@@ -29,7 +29,8 @@ The harness targets a model running at 16.5 tokens per second. Waiting for a ful
 | `uv run pytest -m "not local_llm"` | Unit tests without the 35B model (fast CI loop) |
 | `uv run pytest -m local_llm` | Full agent tests with the real model (slow, local only) |
 | `uv run harness doctor` | Probe hardware profile and runtime readiness |
-| `uv run harness benchmark` | Run capability benchmarks from `benchmarks/model-capabilities.json` |
+| `uv run harness run --help` | Run the agent on a task (resume, overrides, approval) |
+| `uv run harness chat --help` | Interactive turn-based session |
 | `uv run pytest --cov=harness --cov-report=json && uv run python scripts/coverage_gate.py` | What CI gates on: one measured run, then the per-package floors |
 
 ## Agent skills

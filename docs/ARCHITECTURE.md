@@ -9,17 +9,23 @@ choice below traces back to a number in [DISCOVERY.md](DISCOVERY.md).
 src/harness/
 ├── discovery/     hardware, runtime and model probing -> hardware-profile.json
 ├── models/        ModelProvider interface + LlamaCppProvider + FakeProvider
-├── runtime/       planned: llama-server supervisor (not implemented)
+├── runtime/       LlamaServerSupervisor: start/attach/health/stop, port verification
 ├── context/       PromptAssembler, TokenBudget, CacheEconomics, compressors
 ├── agent/         AgentLoop, roles, Planner, TaskState, RetryPolicy
 ├── protocol/      ActionCodec (native tool_calls | constrained JSON), schemas
-├── tools/         registry, typed tools, ToolResult compression
-├── memory/        SQLite: task state, run journal, persistent facts
-├── retrieval/     planned: Retriever interface (not implemented)
-├── security/      command classification and approval gate
-├── telemetry/     structured run log, no CoT, no secrets
-├── benchmark/     planned: capability and task benchmarks (not implemented)
-└── cli.py         Typer entry point
+├── tools/         registry, typed tools, builtin specs, shell/filesystem/git exec,
+│                  ToolResult compression (compression.py), internal security helpers
+├── memory/        SQLite: task state, run journal, persistent facts (facts.py),
+│                  read-only inspect (inspect.py), schema migrations (migrations.py)
+├── retrieval/     Retriever interface + SqliteFtsRetriever (FTS5)
+├── security/      command classification, shell splitting, approval gate
+├── telemetry/     structured run log, no CoT, no secrets; redaction helpers
+├── session.py     assembles AgentLoop from configuration
+├── cli.py         Typer entry point — doctor, model-info, version
+├── cli_run.py     run command with resume, overrides, --approve-confirmable
+├── cli_chat.py    chat command: /status, /context, /usage, /exit
+├── cli_inspect.py config show + memory inspect with --json
+└── benchmark/     planned: capability and task benchmarks (not implemented)
 ```
 
 No `agent.py` holding the whole system. Each module owns one decision.
@@ -216,20 +222,31 @@ boundary was never the model.
 
 ## Runtime supervision
 
-Runtime supervision is planned and not implemented. Today the provider attaches
-to an already-running `llama-server`; it does not launch or reconfigure it.
+The runtime module (`src/harness/runtime/`) implements full process lifecycle:
 
-The planned supervisor must handle the environment quirk discovered on this machine: LM Studio's CUDA
-backends link against CUDA 11.8 while the host driver provides 13.0, so both the
-backend directory and `vendor/linux-llama-cuda-vendor-v1` must be on
-`LD_LIBRARY_PATH` or the binary will not start.
+- **`RuntimeHandle`** — carries ownership (`owned` vs `attached`), PID, start
+  time, and log path. Owned and attached are structurally different types, not
+  a flag.
+- **`LlamaServerSupervisor`** — `start()`, `attach()`, `ensure()`, `health()`,
+  `stop()`. Health-wait distinguishes crashed, timeout, and still-loading
+  outcomes.
+- **`build_argv()`** — assembles the launch command from `ModelConfig` and
+  `RuntimeConfig`, with typed defaults before `extra_flags`.
+- **`inspect_port()` / `verify_owner()`** — classifies port state (free, our
+  server, foreign server, foreign service) before launch and confirms the
+  answering process is the one we started afterwards.
+- **`stop()`** sends SIGTERM with a grace period and hard-kills only after the
+  deadline. It refuses to stop an attached process.
+- Stdout/stderr is piped through `telemetry.redact` into a log file line by
+  line.
 
-The planned scope covers: launch with a profile, readiness polling (the server answers
-`503 Loading model` before it is ready), health checks, graceful shutdown before
-a reconfiguration, and refusal to start a profile whose projected memory
-footprint exceeds available RAM minus reserve.
+The supervisor handles the environment quirk discovered on this machine: LM
+Studio's CUDA backends link against CUDA 11.8 while the host driver provides
+13.0, so both the backend directory and `vendor/linux-llama-cuda-vendor-v1`
+must be on `LD_LIBRARY_PATH` or the binary will not start.
 
-Attaching to an already-running server is the only implemented mode today.
+Not yet implemented: server reconfiguration (e.g., growing `--ctx-size` mid-run)
+and memory-footprint projection before launch.
 
 ## Provider interface
 
@@ -257,9 +274,11 @@ SQLite, two levels, no vector database.
 - **Persistent memory** — architecture notes, conventions, decisions, known
   issues. Explicitly written, never harvested automatically from transcripts.
 
-Retrieval adapters are planned and not implemented. Persistent facts already
-use SQLite with optional FTS5; a future retriever may build on that only after
-benchmarks justify it. No vector database is present.
+Retrieval adapters are implemented: the `Retriever` interface defines a single
+`query(limit)` method, and `SqliteFtsRetriever` queries the existing FTS5
+persistent-facts index without duplicating data across tables. Retrieval is not
+yet exposed as an agent tool (the model has no tool to query facts); that is the
+next step. No vector database is present.
 
 ## Telemetry
 
