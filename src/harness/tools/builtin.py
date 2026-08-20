@@ -18,9 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from harness.core import NetworkMode, Risk, SideEffect, ToolSpec
+from harness.retrieval.base import Retriever
 from harness.tools.filesystem import list_files, read_file, search_files, write_file
 from harness.tools.git import git_diff, git_log, git_status
 from harness.tools.registry import ToolRegistry
+from harness.tools.retrieval_tool import retrieve_facts
 from harness.tools.shell import ConfirmCallback, run_command
 
 
@@ -142,6 +144,42 @@ GIT_LOG = ToolSpec(
     ),
 )
 
+RETRIEVE_FACTS = ToolSpec(
+    name="retrieve_facts",
+    description=(
+        "Search persistent memory for facts matching a keyword query. Returns "
+        "ranked hits, each labelled with its source and id, so a claim can "
+        "cite where it came from. Read-only; safe to repeat."
+    ),
+    risk=Risk.ALLOW,
+    side_effect=SideEffect.NONE,
+    parameters=_object(
+        {
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Keywords to search the fact store for.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "description": "Maximum hits to return (default 5).",
+            },
+        },
+        ["query"],
+    ),
+)
+"""The retrieval tool, registered only when a retriever is wired in.
+
+Deliberately absent from ``BUILTIN_SPECS``: that tuple is the set every run
+gets, and a run without a retriever would advertise a tool that cannot answer.
+Registering it conditionally keeps the cached prefix honest about what the
+model can actually call. Adding it is a one-time prefix change at setup — the
+tools segment moves once, then stays byte-identical across every retrieval
+call in the run (issue #18, criterion 8)."""
+
+
 BUILTIN_SPECS: tuple[ToolSpec, ...] = (
     GIT_DIFF,
     GIT_LOG,
@@ -160,6 +198,7 @@ def build_registry(
     confirm: ConfirmCallback | None = None,
     network: NetworkMode = NetworkMode.ISOLATED,
     read_only: bool = False,
+    retriever: Retriever | None = None,
 ) -> ToolRegistry:
     """Register the built-in tools against one workspace.
 
@@ -169,7 +208,14 @@ def build_registry(
 
     ``read_only`` leaves out everything that can change the world. Useful for
     a run that is only meant to look, where the cheapest way to guarantee that
-    is not to offer the tools.
+    is not to offer the tools. Retrieval is read-only, so it stays available in
+    a look-only run — a run that can only look is exactly the run that benefits
+    from querying memory.
+
+    ``retriever`` adds the ``retrieve_facts`` tool. It is the only tool without
+    a workspace to bind: it binds a retriever instead, and is absent when none
+    is given, so the tool set the prefix advertises is always one the model can
+    actually call.
     """
     registry = ToolRegistry()
     bind = partial(_bind, workspace)
@@ -180,6 +226,9 @@ def build_registry(
     registry.register(GIT_STATUS, bind(git_status))
     registry.register(GIT_DIFF, bind(git_diff))
     registry.register(GIT_LOG, bind(git_log))
+
+    if retriever is not None:
+        registry.register(RETRIEVE_FACTS, partial(retrieve_facts, retriever))
 
     if not read_only:
         registry.register(WRITE_FILE, bind(write_file))
@@ -194,4 +243,4 @@ def _bind(workspace: Path, function: Any) -> Any:
     return partial(function, workspace)
 
 
-__all__ = ["BUILTIN_SPECS", "build_registry"]
+__all__ = ["BUILTIN_SPECS", "RETRIEVE_FACTS", "build_registry"]

@@ -25,6 +25,8 @@ from harness.models.llamacpp import LlamaCppProvider
 from harness.protocol.codec import ActionCodec
 from harness.protocol.constrained import ConstrainedJsonCodec
 from harness.protocol.native import NativeToolCallCodec
+from harness.retrieval import as_retrieve_fn
+from harness.retrieval.sqlite import SqliteFtsRetriever
 from harness.telemetry.journal import RunJournal
 from harness.tools.builtin import build_registry
 from harness.tools.registry import ToolRegistry
@@ -96,11 +98,20 @@ def build_loop(
     so two runs with the same configuration assemble the same agent.
     """
     workspace = config.workspace.resolve()
+    identifier = run_id or new_run_id()
+    store = memory or MemoryStore(_database_path(config))
+    # One retriever feeds two consumers: the ``retrieve_facts`` tool the model
+    # calls, and the compression ladder's ``RetrieveAgain`` rung. Both only
+    # append, so neither touches the cached prefix; wiring both here is what
+    # makes retrieval a first-class part of the context pipeline rather than a
+    # tool floating beside it (issue #18).
+    retriever = SqliteFtsRetriever(store)
     tools = build_registry(
         workspace,
         confirm=confirm,
         network=config.sandbox.network or NetworkMode.ISOLATED,
         read_only=read_only,
+        retriever=retriever,
     )
     assembler = PromptAssembler(
         system=SYSTEM_PROMPT, task=goal, tools=tools.specs()
@@ -111,8 +122,6 @@ def build_loop(
         generation_reserve_ratio=config.context.generation_reserve_ratio,
     )
 
-    identifier = run_id or new_run_id()
-    store = memory or MemoryStore(_database_path(config))
     return AgentLoop(
         run_id=identifier,
         goal=goal,
@@ -125,6 +134,7 @@ def build_loop(
         memory=store,
         journal=journal or RunJournal(_journal_dir(config, identifier), identifier),
         budget=Budget(**config.budget.model_dump()),
+        retrieve=as_retrieve_fn(retriever),
     )
 
 

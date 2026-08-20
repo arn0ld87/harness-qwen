@@ -8,7 +8,7 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 
 - v0.2 Hardening (#5–#9, #33): COMPLETE
 - v0.3 Runtime & CLI (#10–#16): COMPLETE
-- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17 und #19 abgeschlossen, #18 sowie #20–#22 offen
+- v0.4 Retrieval & Benchmarks (#17–#22): PARTIAL — #17, #18 und #19 abgeschlossen, #20–#22 offen
 
 ## Ausfuehrungsprotokoll
 
@@ -97,7 +97,27 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo moeglich,
 
 ### Phase C — v0.4 Retrieval & Benchmarks (PARTIAL)
 - [x] #17 `retrieval/` Retriever-Interface + SqliteFtsRetriever (FTS5-Fallback)
-- [ ] #18 Retrieval als Tool in ToolRegistry (Append-Zone, Prefix-stabil, E2E)
+- [x] #18 Retrieval als Tool in ToolRegistry (Append-Zone, Prefix-stabil, E2E)
+  - `tools/retrieval_tool.py`: async `retrieve_facts(retriever, *, query,
+    limit=DEFAULT_LIMIT)` → `ToolResult` mit `render_hits` (source:id-Labels).
+    Coroutine dispatcht im Event-Loop-Thread (gleicher Thread wie die
+    Kompressionsleiter, kein `to_thread` → SQLite `check_same_thread=False`
+    + Store-Lock reichen).
+  - `tools/builtin.py`: `RETRIEVE_FACTS`-Spec (Risk.ALLOW, SideEffect.NONE,
+    query required + limit optional 1–20). `build_registry(retriever=...)`
+    registriert bedingt; nicht in `BUILTIN_SPECS` (ein Run ohne Retriever
+    würde sonst ein Tool advertisen, das nicht antworten kann).
+  - `session.py build_loop`: baut einen `SqliteFtsRetriever` aus dem Store,
+    gibt ihn an `build_registry` (Tool) und an `AgentLoop.retrieve=
+    as_retrieve_fn(retriever)` (RetrieveAgain-Rung). Ein Retriever, zwei
+    Verbraucher, beide nur appendend.
+  - Kriterium 5 (kein Retrieval während ContextOverflow): RetrieveAgain wird
+    bei `context_overflow` übersprungen — bereits in `test_context_compressor`
+    geprüft, jetzt über `build_loop` aktiviert.
+  - Kriterium 6 (stale Resultate markieren): `DropSupersededToolOutputs`
+    markiert ältere `retrieve_facts`-Outputs bei Wiederholung (nach Tool-Name).
+  - Tests: `tests/test_retrieval_tool.py` (11) — Registration, Shape, E2E
+    (retrieve→ToolResult→Answer), Prefix-Hash-Stabilität über Calls.
 - [x] #19 `benchmark/` Framework (ID, Fingerprint, Warmup/Mess, JSON, Perzentile)
 - [ ] #20 Flag-Sweep (Prozessidentitaet, Invaliditaetsregeln)
 - [ ] #21 Harness vs Plain Loop (Task-Suite, Metriken, cold/warm, negative Results)

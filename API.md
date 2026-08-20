@@ -245,7 +245,8 @@ Action = ToolAction | AnswerAction
 
 Two actions, deliberately. `plan` is not a model action — planning is a role
 that updates `TaskState` through the tool channel. `delegate` is absent because
-roles run sequentially. `request_context` is absent; retrieval is planned as a tool.
+roles run sequentially. `request_context` is absent; retrieval is the
+`retrieve_facts` tool, not a model action.
 Actions are added when a benchmark shows their absence costs something.
 
 ```python
@@ -374,16 +375,41 @@ it is not a constant.
 class ToolRegistry:
     def register(self, spec: ToolSpec, fn: Callable) -> None: ...
     def specs(self) -> list[ToolSpec]: ...
-    async def execute(self, name: str, arguments: dict) -> ToolResult: ...
+    async def invoke(self, name: str, arguments: dict) -> ToolResult: ...
+
+def build_registry(
+    workspace: Path, *,
+    confirm: ConfirmCallback | None = None,
+    network: NetworkMode = NetworkMode.ISOLATED,
+    read_only: bool = False,
+    retriever: Retriever | None = None,
+) -> ToolRegistry: ...
 ```
 
-`execute()` validates arguments against the spec's JSON Schema, enforces
+`invoke()` validates arguments against the spec's JSON Schema, enforces
 `timeout_s`, and converts every exception into a `ToolResult` with `ok=False`.
 An unknown tool name returns `error_kind="not_found"` listing available tools —
 a wrong tool name is a recoverable mistake, not a crash.
 
+`build_registry()` binds the built-in tools to one workspace. `retriever` adds
+`retrieve_facts`; the tool is absent without one so the prefix never advertises
+a tool the model cannot call. Retrieval is read-only, so it stays available in a
+`read_only` run.
+
+```python
+async def retrieve_facts(
+    retriever: Retriever, *, query: str, limit: int = DEFAULT_LIMIT
+) -> ToolResult: ...
+```
+
+The tool counterpart to the compression ladder's `RetrieveAgain` rung: same
+retriever, same `render_hits` labels (`source:id`), but model-driven. A
+coroutine on purpose — it dispatches in the event-loop thread the ladder
+already uses, rather than a worker thread. No match is an honest empty answer.
+
 **Shipped tools:** `read_file`, `write_file`, `list_files`, `search_files`,
-`run_command`, `git_status`, `git_diff`, `git_log`.
+`run_command`, `git_status`, `git_diff`, `git_log`, and `retrieve_facts` (when
+a retriever is wired in).
 
 ---
 

@@ -67,14 +67,16 @@ Implemented since the initial version:
   graceful stop, and port-ownership verification before and after launch.
 - Retrieval adapters (`retrieval/`) — `Retriever` interface and
   `SqliteFtsRetriever` over the existing FTS5 persistent-facts index.
+- Retrieval as an agent tool (`tools/retrieval_tool.py`) — the model queries
+  the fact store through the `ToolRegistry`; results land in the append zone
+  with `source:id` labels, and the same retriever feeds the `RetrieveAgain`
+  compression rung. The cached prefix never moves.
 - `harness run` — runs an agent on a task with resume, budget enforcement,
   tool safety, and evidence-based verification.
 - `harness chat` — interactive session with `/status`, `/context`, `/usage`,
   `/help`, and `/exit` commands.
 
 Planned, not implemented:
-- Retrieval as an agent tool (the module and FTS5 index exist, but the model
-  has no tool to query them yet).
 - The benchmark flag sweep and the harness-vs-plain-loop comparison. The
   `benchmark/` framework itself is implemented — suite, runner, fingerprint,
   percentiles, JSON artefact — but no sweep against the 35B model has been
