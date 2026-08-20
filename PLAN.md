@@ -16,7 +16,21 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
 - [x] #5 WorkspaceBaseline Git-unabhängig + FileEvidence per Fingerprint
 - [x] #6 ContextOverflow netto: RetrieveAgain bei Overflow skippen, Netto-Token-Rechnung, Hard-Ceiling
 - [x] #7 Shell-Sandbox fail-closed + --unshare-net default + doctor-Erkennung
-- [ ] #8 Resume UNCERTAIN + Side-Effect-Policy (ToolSpec.idempotency/side_effect)
+- [x] #8 Resume UNCERTAIN + Side-Effect-Policy (ToolSpec.idempotency/side_effect)
+
+#### Sub-Slice 8.1 — Side-Effect-Klasse und UNCERTAIN-Resume
+1. `core.SideEffect` (`none`/`idempotent`/`mutating`), `ToolSpec.side_effect`
+   mit fail-closed Default `mutating`. Nicht in `to_openai_tool()` — der
+   Prefix bleibt byteidentisch.
+2. `StepStatus.UNCERTAIN`; Schema bleibt bei v2 (status hat kein CHECK).
+3. Resume differenziert: `model_call` und nicht-mutierende Tools -> `FAILED`
+   (sicher wiederholbar), mutierende Tool-Steps -> `UNCERTAIN`.
+4. Guard: der erste identische Wiederholungsversuch eines UNCERTAIN-Calls
+   wird nicht ausgefuehrt, sondern als `uncertain_side_effect` zurueckgemeldet.
+5. Bericht: `RunResult.uncertain_steps`, Journal-Event, `open_problems`,
+   Append-Hinweis an das Modell.
+6. Tests: Crash vor Side Effect, nach Side Effect/vor Checkpoint, nach
+   Checkpoint, read-only Tool, Guard-Verhalten.
 - [ ] #9 CI: einmaliger Coverage-Lauf, --cov-fail-under, Capability-Marker, ruff+pytest--cov
 
 ### Phase B — v0.3 Runtime & CLI

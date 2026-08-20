@@ -76,11 +76,17 @@ class Risk(StrEnum):
     CONFIRM = "confirm"   # requires explicit approval
     DENY = "deny"         # refused, not confirmable
 
+class SideEffect(StrEnum):
+    NONE = "none"              # read-only
+    IDEMPOTENT = "idempotent"  # same end state however often it runs
+    MUTATING = "mutating"      # may apply its effect twice
+
 class ToolSpec(BaseModel):
     name: str
     description: str
     parameters: dict      # JSON Schema for the arguments object
     risk: Risk
+    side_effect: SideEffect   # default MUTATING; resume policy, not security
     timeout_s: float
 
     def to_openai_tool(self) -> dict: ...
@@ -101,7 +107,12 @@ class ToolResult(BaseModel):
 output, so nothing is lost — it simply is not paid for on every later step.
 
 `error_kind` values: `not_found`, `timeout`, `denied`, `invalid_arguments`,
-`execution_failed`, `permission_denied`.
+`execution_failed`, `permission_denied`, `uncertain_side_effect`.
+
+`side_effect` is what resume consults after a crash, and it defaults to
+`MUTATING`: a tool nobody classified is not a safe tool. It is deliberately
+absent from `to_openai_tool()` — the declaration block sits in the cached
+prefix, and this is harness bookkeeping the model never needs to read.
 
 ### Protocol layer
 

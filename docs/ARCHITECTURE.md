@@ -113,6 +113,16 @@ Every step is journaled to SQLite before it executes. A killed run resumes from
 the last committed step rather than starting over — which matters when a single
 cold prompt costs 25 s.
 
+Writing the step first is what makes resume correct, but it also means a step
+left at `RUNNING` is ambiguous: the process may have died before the tool ran,
+or after its side effect and before the checkpoint. The history cannot tell
+those apart, so resume does not pretend to. A model call or a tool declared
+`SideEffect.NONE`/`IDEMPOTENT` is marked `FAILED` and may simply be repeated;
+anything mutating becomes `UNCERTAIN`, is reported on `RunResult`, and the
+first identical repeat is refused with `uncertain_side_effect` so the model
+verifies the world before applying the effect a second time. Tools that do not
+declare a class count as mutating.
+
 ## Action protocol
 
 Two codecs behind one interface, because the runtime supports both and only

@@ -370,6 +370,62 @@ class MemoryStore:
                 (runtime_state.run_id, runtime_state.model_dump_json(), _now()),
             )
 
+    def commit_resume_recovery(
+        self,
+        *,
+        steps: Iterable[tuple[int, StepStatus, str]],
+        task_state: TaskState,
+        runtime_state: RunRuntimeState,
+    ) -> None:
+        """Close out orphaned steps and both resume states in one transaction.
+
+        Resume classifies what a killed process left behind and, for anything
+        it cannot call safely repeatable, records a guard against repeating it.
+        Committing the classification without the guard would leave a database
+        that looks recovered and is not, so a death anywhere in here rolls the
+        whole recovery back and the next resume simply does it again.
+        """
+        with self._lock, self._conn:
+            for step_id, status, note in steps:
+                cur = self._conn.execute(
+                    """
+                    UPDATE steps SET status = ?, finished_at = ?, note = ?
+                    WHERE id = ? AND run_id = ?
+                    """,
+                    (str(status), _now(), note, step_id, task_state.run_id),
+                )
+                if cur.rowcount == 0:
+                    raise StoreError(
+                        f"no step {step_id} for run {task_state.run_id!r}"
+                    )
+            self._upsert_run(task_state, overwrite_goal=False)
+            self._conn.execute(
+                """
+                INSERT INTO task_state (run_id, step_index, state_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    step_index = excluded.step_index,
+                    state_json = excluded.state_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    task_state.run_id,
+                    task_state.step_index,
+                    task_state.model_dump_json(),
+                    task_state.updated_at.isoformat(),
+                ),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO runtime_state (run_id, runtime_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    runtime_json = excluded.runtime_json,
+                    updated_at = excluded.updated_at
+                """,
+                (runtime_state.run_id, runtime_state.model_dump_json(), _now()),
+            )
+
     def get_steps(self, run_id: str) -> list[StepRecord]:
         rows = self._conn.execute(
             "SELECT * FROM steps WHERE run_id = ? ORDER BY step_index, id", (run_id,)

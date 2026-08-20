@@ -50,10 +50,13 @@ from harness.core import (
     Role,
     RunResult,
     RunRuntimeState,
+    SideEffect,
     StepStatus,
     StopReason,
     TaskState,
     ToolAction,
+    ToolResult,
+    UncertainStep,
     Usage,
 )
 from harness.memory.migrations import StoreError
@@ -71,6 +74,20 @@ against the tool-call budget — a stuck run stops instead of burning it."""
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _call_key(tool: str, arguments: dict[str, Any]) -> tuple[str, str]:
+    """Stable identity of one call, shared by repetition and side-effect checks."""
+    return tool, json.dumps(arguments, sort_keys=True, default=str)
+
+
+def _status_for(result: ToolResult) -> StepStatus:
+    """A refused call did not run, so it is skipped rather than failed."""
+    if result.ok:
+        return StepStatus.DONE
+    if result.error_kind == "uncertain_side_effect":
+        return StepStatus.SKIPPED
+    return StepStatus.FAILED
 
 
 @dataclass(slots=True)
@@ -127,6 +144,8 @@ class AgentLoop:
 
         self._executed: list[ExecutedStep] = []
         self._recent_calls: deque[tuple[str, str]] = deque(maxlen=NO_PROGRESS_REPEAT)
+        self._uncertain: list[UncertainStep] = []
+        self._blocked_calls: set[tuple[str, str]] = set()
         self._tool_calls = 0
         self._retries_used = 0
         self._prompt_tokens = 0
@@ -168,7 +187,9 @@ class AgentLoop:
                 return self._answer(state, action)
 
             assert isinstance(action, ToolAction)
-            if self._is_no_progress(action.tool, action.arguments):
+            if not self._is_blocked(action) and self._is_no_progress(
+                action.tool, action.arguments
+            ):
                 self.journal.log_event("no_progress", tool=action.tool, step=state.step_index)
                 return self._finalize(state, stop_reason=StopReason.NO_PROGRESS)
 
@@ -281,8 +302,10 @@ class AgentLoop:
             tool=action.tool,
             arguments=action.arguments,
         )
-        result = await self.tools.invoke(action.tool, action.arguments)
-        self._tool_calls += 1
+        result = await self._invoke_or_refuse(action)
+        refused = result.error_kind == "uncertain_side_effect"
+        if not refused:
+            self._tool_calls += 1
         self._executed.append(
             ExecutedStep(
                 id=step_id,
@@ -297,7 +320,7 @@ class AgentLoop:
             step=f"tool:{action.tool}", tool=action.tool, tool_ms=result.duration_ms,
             exit_code=result.exit_code, error_kind=result.error_kind,
         )
-        if not result.ok:
+        if not result.ok and not refused:
             note = f"step {state.step_index}: {action.tool} failed: {result.content[:200]}"
             state.open_problems.append(note)
         state.step_index += 1
@@ -306,12 +329,48 @@ class AgentLoop:
         self._maybe_compress(state)
         self.memory.save_tool_checkpoint(
             step_id=step_id,
-            status=StepStatus.DONE if result.ok else StepStatus.FAILED,
+            status=_status_for(result),
             task_state=state,
             runtime_state=self._runtime_state(),
             exit_code=result.exit_code,
             error_kind=result.error_kind,
             duration_ms=result.duration_ms,
+        )
+
+    def _is_blocked(self, action: ToolAction) -> bool:
+        """Whether this exact call is still awaiting a deliberate repeat."""
+        return _call_key(action.tool, action.arguments) in self._blocked_calls
+
+    async def _invoke_or_refuse(self, action: ToolAction) -> ToolResult:
+        """Execute the call, unless it repeats an interrupted side effect.
+
+        The refusal fires once per interrupted call and then clears: the point
+        is that resume never *silently* re-applies an effect, not that the run
+        is forbidden from ever getting there. A model that has read why the
+        call was refused and asks for it again is making a decision, which is
+        the one place that decision belongs.
+        """
+        key = _call_key(action.tool, action.arguments)
+        if key not in self._blocked_calls:
+            return await self.tools.invoke(action.tool, action.arguments)
+
+        self._blocked_calls.discard(key)
+        self._uncertain = [
+            item
+            for item in self._uncertain
+            if _call_key(item.tool, item.arguments) != key
+        ]
+        self.journal.log_event("uncertain_call_refused", tool=action.tool)
+        return ToolResult(
+            tool=action.tool,
+            ok=False,
+            error_kind="uncertain_side_effect",
+            content=(
+                f"Not executed. An identical {action.tool} call was interrupted "
+                "before its outcome was recorded, so it may already have taken "
+                "effect. Verify the current state first; request this call again "
+                "only if the check shows it did not."
+            ),
         )
 
     # -- context compression ---------------------------------------------
@@ -366,8 +425,7 @@ class AgentLoop:
     # -- no-progress detection --------------------------------------------
 
     def _is_no_progress(self, tool: str, arguments: dict[str, Any]) -> bool:
-        signature = (tool, json.dumps(arguments, sort_keys=True, default=str))
-        self._recent_calls.append(signature)
+        self._recent_calls.append(_call_key(tool, arguments))
         return (
             len(self._recent_calls) == self._recent_calls.maxlen
             and len(set(self._recent_calls)) == 1
@@ -428,12 +486,11 @@ class AgentLoop:
             if existing.goal != self.goal or workspace_changed:
                 raise StoreError(f"run {self.run_id!r} does not match goal or workspace")
             self._restore_run_state()
-            for step in self.memory.unfinished_steps(self.run_id):
-                self.memory.complete_step(
-                    step.id, status=StepStatus.FAILED,
-                    note="orphaned: run resumed after interruption",
-                )
-            self.journal.log_event("run_resumed", step_index=existing.step_index)
+            self._recover_orphaned_steps(existing)
+            self.journal.log_event(
+                "run_resumed", step_index=existing.step_index,
+                uncertain=len(self._uncertain),
+            )
             return existing
         now = _now()
         state = TaskState(
@@ -450,12 +507,97 @@ class AgentLoop:
         self.journal.log_event("run_started", goal=self.goal)
         return state
 
+    def _recover_orphaned_steps(self, state: TaskState) -> None:
+        """Classify the steps a killed process left behind (issue #8).
+
+        A step still at RUNNING says only that execution began. For a model
+        call or a read-only tool that is a plain failure — nothing outside the
+        process changed, and repeating it is free. For a mutating tool the
+        history genuinely cannot say whether the side effect landed, so the
+        step resumes as UNCERTAIN, the call is guarded against an automatic
+        repeat, and the model is told before it can ask for one.
+
+        Nothing is written until the whole classification is ready: marking a
+        step UNCERTAIN without also committing its guard would produce a
+        database that looks recovered while the protection is gone. A death in
+        the middle leaves the steps at RUNNING and the next resume repeats
+        this pass.
+        """
+        orphans = self.memory.unfinished_steps(self.run_id)
+        if not orphans:
+            return
+
+        updates: list[tuple[int, StepStatus, str]] = []
+        found: list[UncertainStep] = []
+        for step in orphans:
+            if step.tool is None:
+                updates.append(
+                    (step.id, StepStatus.FAILED,
+                     "orphaned: run resumed after interruption")
+                )
+                continue
+
+            effect = self._side_effect_of(step.tool)
+            if effect.repeatable:
+                updates.append(
+                    (step.id, StepStatus.FAILED,
+                     f"orphaned: {step.tool} is {effect}, safe to repeat")
+                )
+                continue
+
+            uncertain = UncertainStep(
+                step_id=step.id,
+                step_index=step.step_index,
+                tool=step.tool,
+                arguments=dict(step.arguments or {}),
+                detail="interrupted between execution and checkpoint",
+            )
+            updates.append((step.id, StepStatus.UNCERTAIN, uncertain.describe()))
+            found.append(uncertain)
+
+        for uncertain in found:
+            self._uncertain.append(uncertain)
+            self._blocked_calls.add(_call_key(uncertain.tool, uncertain.arguments))
+            state.open_problems.append(uncertain.describe())
+            self.journal.log_event(
+                "resume_uncertain_step", tool=uncertain.tool, step_id=uncertain.step_id,
+            )
+
+        if found:
+            # Only what this pass discovered: an earlier resume's warning is
+            # already in the restored append history, and repeating it would
+            # re-arm a caution the model has been given and acted on.
+            listing = "\n".join(f"- {item.describe()}" for item in found)
+            self.assembler.append(
+                Message(
+                    role="user",
+                    content=(
+                        "[resume] This run was interrupted. The following tool "
+                        "calls may or may not have taken effect:\n"
+                        f"{listing}\n"
+                        "Check the current state before repeating any of them."
+                    ),
+                )
+            )
+
+        state.updated_at = _now()
+        self.memory.commit_resume_recovery(
+            steps=updates, task_state=state, runtime_state=self._runtime_state(),
+        )
+
+    def _side_effect_of(self, tool: str) -> SideEffect:
+        """Repetition class of a tool, fail-closed for anything unregistered."""
+        entry = self.tools.get(tool)
+        return entry.spec.side_effect if entry else SideEffect.MUTATING
+
     def _restore_run_state(self) -> None:
         runtime = self.memory.load_runtime_state(self.run_id)
         if runtime is None:
             raise StoreError(f"run {self.run_id!r} has no persisted runtime state")
         self._executed = list(runtime.executed_steps)
         self._recent_calls.extend(runtime.recent_calls)
+        self._uncertain = list(runtime.uncertain_steps)
+        self._blocked_calls = set(runtime.blocked_calls)
         self.assembler.restore_append(runtime.append_history)
         self._active_step_index = runtime.active_step_index
         self._tool_calls = runtime.tool_calls
@@ -473,6 +615,8 @@ class AgentLoop:
             run_id=self.run_id,
             executed_steps=self._executed,
             recent_calls=list(self._recent_calls),
+            uncertain_steps=self._uncertain,
+            blocked_calls=sorted(self._blocked_calls),
             append_history=self.assembler.append_messages,
             active_step_index=self._active_step_index,
             tool_calls=self._tool_calls,
@@ -498,6 +642,7 @@ class AgentLoop:
             total_completion_tokens=self._completion_tokens,
             total_cached_tokens=self._cached_tokens,
             elapsed_s=self._elapsed(),
+            uncertain_steps=list(self._uncertain),
         )
         self.memory.finish_run(result)
         self.journal.log_event(

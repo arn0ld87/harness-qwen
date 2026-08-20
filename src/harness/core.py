@@ -164,6 +164,28 @@ class NetworkMode(enum.StrEnum):
     ALLOWED = "allowed"
 
 
+class SideEffect(enum.StrEnum):
+    """How a tool behaves when the same call is repeated.
+
+    This is a crash-recovery classification, not a security one: it answers
+    "may resume run this again without asking?", which ``Risk`` does not.
+
+    ``NONE`` is read-only, ``IDEMPOTENT`` converges on the same end state no
+    matter how often it runs, and ``MUTATING`` may apply its effect twice.
+    The default is ``MUTATING`` because a tool nobody classified is not a safe
+    tool — the same fail-closed rule ``Risk`` uses for unknown commands.
+    """
+
+    NONE = "none"
+    IDEMPOTENT = "idempotent"
+    MUTATING = "mutating"
+
+    @property
+    def repeatable(self) -> bool:
+        """Whether an interrupted call may simply be run again."""
+        return self is not SideEffect.MUTATING
+
+
 class ToolSpec(BaseModel):
     """Declaration of a tool as presented to the model."""
 
@@ -172,6 +194,10 @@ class ToolSpec(BaseModel):
     parameters: dict[str, Any]
     """JSON Schema for the arguments object."""
     risk: Risk = Risk.ALLOW
+    side_effect: SideEffect = SideEffect.MUTATING
+    """Repetition class used by resume. Deliberately absent from
+    :meth:`to_openai_tool` — it is harness bookkeeping, and adding a field to
+    the declaration block would invalidate the cached prefix for no gain."""
     timeout_s: float = 120.0
 
     def to_openai_tool(self) -> dict[str, Any]:
@@ -310,11 +336,19 @@ class Role(enum.StrEnum):
 
 
 class StepStatus(enum.StrEnum):
+    """Terminal state of a recorded step.
+
+    ``UNCERTAIN`` exists because a killed process leaves no note about whether
+    the tool it was running got as far as its side effect. Calling that state
+    ``FAILED`` would be a claim the database cannot support.
+    """
+
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
     SKIPPED = "skipped"
+    UNCERTAIN = "uncertain"
 
 
 class PlanStep(BaseModel):
@@ -334,12 +368,37 @@ class WorkspaceBaseline(BaseModel):
     captured_at: datetime
 
 
+class UncertainStep(BaseModel):
+    """A mutating tool step that was in flight when the process died.
+
+    Reported rather than retried: whether the effect landed is unknown, and
+    guessing either way is worse than saying so.
+    """
+
+    step_id: int
+    step_index: int
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    detail: str = ""
+
+    def describe(self) -> str:
+        return (
+            f"step {self.step_index}: {self.tool} was interrupted before its "
+            f"outcome was recorded; it may or may not have taken effect"
+        )
+
+
 class RunRuntimeState(BaseModel):
     """Runtime bookkeeping that must survive reconstruction of AgentLoop."""
 
     run_id: str
     executed_steps: list[ExecutedToolStep] = Field(default_factory=list)
     recent_calls: list[tuple[str, str]] = Field(default_factory=list)
+    uncertain_steps: list[UncertainStep] = Field(default_factory=list)
+    blocked_calls: list[tuple[str, str]] = Field(default_factory=list)
+    """Interrupted side-effect calls still awaiting a deliberate repeat. Both
+    survive here so a second crash during recovery does not quietly drop the
+    protection the first one earned."""
     append_history: list[Message] = Field(default_factory=list)
     active_step_index: int | None = None
     tool_calls: int = 0
@@ -409,3 +468,8 @@ class RunResult(BaseModel):
     total_completion_tokens: int = 0
     total_cached_tokens: int = 0
     elapsed_s: float = 0.0
+    uncertain_steps: list[UncertainStep] = Field(default_factory=list)
+    """Interrupted side-effect steps still unresolved when the run ended. A
+    step drops off this list once the harness has refused an automatic repeat
+    and handed the question to the model — everything left here is an
+    ambiguity nobody looked at."""
