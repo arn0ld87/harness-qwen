@@ -27,7 +27,7 @@ uv run harness doctor            # Probe hardware and runtime
 | `src/harness/protocol/` | `ActionCodec` (native tool_calls or constrained JSON), schemas |
 | `src/harness/tools/` | Registry, typed tools, `ToolResult` compression |
 | `src/harness/memory/` | SQLite: task state, run journal, persistent facts |
-| `src/harness/retrieval/` | Planned; not implemented |
+| `src/harness/retrieval/` | `Retriever` interface, `SqliteFtsRetriever` over persistent facts |
 | `src/harness/security/` | Command classification (allow/confirm/deny) and approval gate |
 | `src/harness/telemetry/` | Structured run log (no CoT, no secrets) |
 | `src/harness/benchmark/` | Planned; not implemented |
@@ -71,8 +71,9 @@ client.
 | `config` | 95% | 97.5% |
 | `diagnostics` | 85% | 86.5% |
 | `context` | 80% | 83.2% |
-| `memory` | 75% | 77.9% |
+| `memory` | 75% | 91.9% |
 | `protocol` | 65% | 68.7% |
+| `retrieval` | 97% | 100.0% |
 | `runtime` | 90% | 95.3% |
 | `security` | 97% | 99.4% |
 | `tools` | 40% | 44.2% |
