@@ -172,6 +172,52 @@ following any `--*-key` / `--*-token` / `--*-password` / `--*-secret` flag in
 `extra_flags`, which llama-server takes as `--api-key VALUE` — a shape no
 `name=value` pattern matches.
 
+### Runtime layer
+
+```python
+class Ownership(StrEnum):
+    OWNED = "owned"          # started here, may be stopped here
+    ATTACHED = "attached"    # someone else's; stop() refuses
+
+class PortState(StrEnum):
+    FREE = "free"
+    INFERENCE_SERVER = "inference_server"   # answers /health
+    FOREIGN_SERVICE = "foreign_service"     # listening, not ours
+    UNKNOWN = "unknown"                     # held by an invisible process
+
+class RuntimeHandle(BaseModel):
+    base_url: str
+    ownership: Ownership
+    pid: int | None
+    started_at: datetime | None
+    log_path: Path | None
+
+class LlamaServerSupervisor:
+    async def start(self, *, timeout_s: float | None = None) -> RuntimeHandle: ...
+    async def attach(self, *, timeout_s: float = 10.0) -> RuntimeHandle: ...
+    async def ensure(self) -> RuntimeHandle: ...      # start or attach, per config
+    async def health(self) -> HealthStatus: ...
+    async def stop(self, *, grace_s: float = 5.0) -> None: ...
+
+def build_argv(config: HarnessConfig) -> list[str]: ...
+def inspect_port(port: int, host: str = ...) -> PortReport: ...
+async def inspect_port_async(port: int, ...) -> PortReport: ...
+async def verify_owner(port: int, pid: int, ...) -> PortReport: ...
+```
+
+Errors: `RuntimeCrashed` (the process exited — read the log),
+`RuntimeStartTimeout` (still not answering — it may just be slow),
+`PortConflict` (someone else has the port), `RuntimeIdentityMismatch` (the
+endpoint answering is not the process we started), `RuntimeNotOwned`.
+
+A start that appears to succeed because something was *already* answering is
+the failure this layer exists to prevent: nothing about the run looks wrong
+afterwards, and every number measured describes a process nobody chose. So the
+port is checked before launching, and the pid holding the socket is checked
+after — "it answers" is never accepted as "our server answers". Identical
+measurements across different runtime configurations are worth treating as a
+symptom of exactly this.
+
 ### Protocol layer
 
 ```python

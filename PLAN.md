@@ -61,7 +61,18 @@ Slice-basiert, ein Commit + Arbeitsprotokoll pro Sub-Slice, TDD wo möglich,
    Start, Crash im Betrieb, Secret im Log, Stop-Verweigerung bei attached).
    Zusaetzlich ein `local_llm`-Test, der an die laufende Instanz attached,
    ohne sie zu stoppen.
-- [ ] #11 Portbesitz, stale/foreign, Startvalidierung (auf #10)
+- [x] #11 Portbesitz, stale/foreign, Startvalidierung (auf #10)
+
+#### Sub-Slice 11.1 — Kein stiller Start gegen einen fremden Prozess
+1. `runtime/port.py`: Portbelegung klassifizieren (frei / eigener / fremder
+   llama-server / fremder Dienst), inklusive PID und Startzeit des Inhabers.
+2. Start prueft vorher: belegter Port fuehrt zu einem klaren Fehler, nicht zu
+   einem scheinbar erfolgreichen Start gegen den Altprozess.
+3. Nach dem Start wird verifiziert, dass der antwortende Endpoint zum eben
+   gestarteten Prozess gehoert (PID/Startzeit, nicht nur "antwortet").
+4. Attach nur bei expliziter Konfiguration; stale/foreign wird benannt.
+5. Tests: Altserver haelt den Port, neuer Start scheitert, Health bleibt
+   erreichbar; fremder Nicht-llama-Dienst; Identitaetspruefung schlaegt fehl.
 - [x] #12 config/ Schicht (Defaults<File<Env<CLI, redigiert, Hardware-Profil, typisiert)
 
 #### Sub-Slice 12.1 — Typisierte Konfiguration mit Provenance

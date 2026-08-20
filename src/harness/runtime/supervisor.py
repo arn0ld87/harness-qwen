@@ -36,6 +36,12 @@ from harness.runtime.handle import (
     RuntimeNotOwned,
     RuntimeStartTimeout,
 )
+from harness.runtime.port import (
+    PortConflict,
+    PortState,
+    inspect_port_async,
+    verify_owner,
+)
 from harness.telemetry.redact import redact
 
 POLL_INTERVAL_S = 0.2
@@ -104,6 +110,7 @@ class LlamaServerSupervisor:
         less obvious message (#11).
         """
         deadline = timeout_s or self.config.runtime.startup_timeout_s
+        await self._require_free_port()
         argv = build_argv(self.config)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = self.log_dir / f"llama-server-{self.config.runtime.port}.log"
@@ -127,10 +134,22 @@ class LlamaServerSupervisor:
             await self.stop()
             raise
 
+        pid = self._process.pid
+        try:
+            # Something answering and our process serving are two facts, and
+            # only the second one makes the numbers that follow meaningful.
+            await verify_owner(
+                self.config.runtime.port, pid, self.config.runtime.host,
+                client=self._ensure_client(),
+            )
+        except Exception:
+            await self.stop()
+            raise
+
         self._handle = RuntimeHandle(
             base_url=self.base_url,
             ownership=Ownership.OWNED,
-            pid=self._process.pid,
+            pid=pid,
             started_at=started_at,
             log_path=self._log_file,
         )
@@ -143,6 +162,15 @@ class LlamaServerSupervisor:
         still loading works — but never starts anything, and never claims a
         process it cannot see.
         """
+        report = await inspect_port_async(
+            self.config.runtime.port, self.config.runtime.host,
+            client=self._ensure_client(),
+        )
+        if not report.free and report.state is not PortState.INFERENCE_SERVER:
+            raise PortConflict(
+                f"cannot attach to port {self.config.runtime.port}: "
+                f"{report.detail or 'it is held by something that does not serve models'}"
+            )
         await self._wait_for_health(timeout_s)
         self._handle = RuntimeHandle(
             base_url=self.base_url, ownership=Ownership.ATTACHED
@@ -185,6 +213,29 @@ class LlamaServerSupervisor:
 
         self._process = None
         self._handle = None
+
+    async def _require_free_port(self) -> None:
+        """Refuse to start against a port somebody else is already using.
+
+        Without this the launched process loses the bind, exits, and the
+        health check succeeds anyway — against the old server. The start looks
+        clean and every measurement after it is somebody else's.
+        """
+        port = self.config.runtime.port
+        report = await inspect_port_async(
+            port, self.config.runtime.host, client=self._ensure_client()
+        )
+        if report.free:
+            return
+
+        hint = (
+            " Set runtime.attach to use it deliberately."
+            if report.state is PortState.INFERENCE_SERVER
+            else ""
+        )
+        raise PortConflict(
+            f"cannot start on port {port}: {report.detail or 'it is in use'}.{hint}"
+        )
 
     # -- health ------------------------------------------------------------
 
